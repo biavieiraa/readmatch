@@ -153,7 +153,6 @@ function renderizarEstante() {
           <h4 class="font-serif font-bold text-xs text-stone-800 line-clamp-1 mt-1">${livro.titulo}</h4>
           <p class="text-[11px] text-cozy-muted truncate">${livro.autor}</p>
 
-          <!-- BARRA DE PROGRESSO SE ESTIVER LENDO -->
           ${livro.status === 'lendo' ? `
             <div class="mt-2.5 pt-2 border-t border-stone-100 space-y-1">
               <div class="flex justify-between text-[10px] font-medium text-cozy-muted">
@@ -311,7 +310,6 @@ function abrirDetalhes(id) {
       </div>
     </div>
 
-    <!-- CAMPO DE PAGINAÇÃO / PROGRESSO DA LEITURA -->
     <div id="bloco-progresso" class="bg-blush-50/60 p-3.5 rounded-xl border border-blush-100 space-y-2 ${livro.status === 'lendo' ? '' : 'hidden'}">
       <div class="flex justify-between items-center text-xs font-semibold text-stone-800">
         <span>Progresso de Leitura</span>
@@ -414,7 +412,6 @@ function atualizarStatus(id, novoStatus) {
   if (livro) {
     livro.status = novoStatus;
     
-    // Se marcou como LIDO, assume que leu 100% das páginas
     if (novoStatus === 'lido') {
       livro.paginaAtual = livro.paginas;
     }
@@ -451,9 +448,9 @@ function deletarLivro(e, id) {
 
 function escolherPorMim() {
   const naoLidos = biblioteca.filter(l => l.status === 'quero_ler');
-  const lista = naoLidos.length > 0 ? naoLidos : biblioteca;
+  const lista = naoLidos.length > 0 ? naoLidos : biblioteca.filter(l => l.status !== 'lido');
 
-  if (lista.length === 0) return alert("Sua estante está vazia!");
+  if (lista.length === 0) return alert("Você não possui livros não lidos para sortear!");
   const sorteado = lista[Math.floor(Math.random() * lista.length)];
   
   document.getElementById('modal-quiz').classList.remove('hidden');
@@ -479,7 +476,12 @@ let etapaAtual = 1;
 let respostas = { vibe: '', tempo: '', genero: '' };
 
 function iniciarQuiz() {
-  if (biblioteca.length === 0) return alert("Adicione alguns livros na estante primeiro.");
+  const naoLidos = biblioteca.filter(l => l.status !== 'lido');
+  if (naoLidos.length === 0) {
+    alert("Você não possui livros pendentes na estante! Adicione novos títulos para fazer o Quiz.");
+    return;
+  }
+
   etapaAtual = 1;
   respostas = { vibe: '', tempo: '', genero: '' };
   document.getElementById('modal-quiz').classList.remove('hidden');
@@ -544,10 +546,29 @@ function selecionarOpcao(chave, valor, proximaEtapa) {
 
 function finalizarQuiz(genero) {
   respostas.genero = genero;
-  const recomendados = biblioteca.map(livro => {
+  
+  // FILTRA APENAS OS LIVROS QUE AINDA NÃO FORAM LIDOS
+  const candidatos = biblioteca.filter(livro => livro.status !== 'lido');
+
+  if (candidatos.length === 0) {
+    const container = document.getElementById('quiz-container');
+    container.innerHTML = `
+      <div class="text-center py-4 space-y-3">
+        <span class="text-xl">📚</span>
+        <h3 class="font-serif text-base font-bold text-stone-800">Nenhum livro pendente</h3>
+        <p class="text-xs text-cozy-muted">Você já leu todos os livros cadastrados na sua estante!</p>
+        <button onclick="fecharQuiz()" class="w-full bg-blush-500 text-white font-semibold py-2 rounded-lg text-xs hover:bg-blush-600 transition cursor-pointer">
+          Fechar
+        </button>
+      </div>
+    `;
+    return;
+  }
+
+  const recomendados = candidatos.map(livro => {
     let match = 50;
     if (livro.genero.toLowerCase() === genero.toLowerCase()) match += 30;
-    if (livro.tags.includes(respostas.vibe)) match += 18;
+    if (livro.tags && livro.tags.includes(respostas.vibe)) match += 18;
     return { ...livro, match: Math.min(match, 99) };
   }).sort((a, b) => b.match - a.match);
 
@@ -559,7 +580,7 @@ function exibirResultado(livros) {
   container.innerHTML = `
     <div class="text-center mb-3">
       <span class="text-[10px] font-bold text-blush-500 uppercase tracking-wider">Resultado</span>
-      <h3 class="font-serif text-base font-bold text-stone-800">Recomendação da Estante</h3>
+      <h3 class="font-serif text-base font-bold text-stone-800">Próximas Leituras Sugeridas</h3>
     </div>
 
     <div class="space-y-2 max-h-72 overflow-y-auto custom-scroll pr-1">
