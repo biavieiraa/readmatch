@@ -4,6 +4,7 @@ const livrosIniciais = [
     titulo: "A Hipótese do Amor",
     autor: "Ali Hazelwood",
     paginas: 336,
+    paginaAtual: 336,
     genero: "Romance",
     tags: ["leve", "romance"],
     capa: "https://m.media-amazon.com/images/I/81+2u4U183L._AC_UF1000,1000_QL80_.jpg",
@@ -17,19 +18,21 @@ const livrosIniciais = [
     titulo: "Os Sete Maridos de Evelyn Hugo",
     autor: "Taylor Jenkins Reid",
     paginas: 360,
+    paginaAtual: 180,
     genero: "Drama",
     tags: ["emocionante", "drama"],
     capa: "https://m.media-amazon.com/images/I/81xUe7v+GSL._AC_UF1000,1000_QL80_.jpg",
-    status: "lido",
+    status: "lendo",
     favorito: true,
-    nota: 5,
-    experiencia: { emocionei: 5, presa: 5, pensei: 5 }
+    nota: 0,
+    experiencia: { emocionei: 0, presa: 0, pensei: 0 }
   },
   {
     id: "3",
     titulo: "Amor & Gelato",
     autor: "Jenna Evans Welch",
     paginas: 320,
+    paginaAtual: 0,
     genero: "Romance",
     tags: ["leve"],
     capa: "https://m.media-amazon.com/images/I/81q2C+O3D+L._AC_UF1000,1000_QL80_.jpg",
@@ -126,28 +129,48 @@ function renderizarEstante() {
     'abandonado': '<span class="bg-stone-100 text-stone-500 text-[10px] font-bold px-2 py-0.5 rounded-full">Abandonado</span>'
   };
 
-  container.innerHTML = livrosExibidos.map(livro => `
-    <div onclick="abrirDetalhes('${livro.id}')" class="bg-white p-2.5 rounded-xl border border-blush-100 shadow-sm hover:shadow transition relative group cursor-pointer flex flex-col justify-between">
-      
-      <button onclick="deletarLivro(event, '${livro.id}')" title="Excluir" class="absolute top-2 right-2 bg-stone-900/70 hover:bg-red-500 text-white w-5 h-5 rounded-full text-xs opacity-0 group-hover:opacity-100 transition z-10 flex items-center justify-center">✕</button>
-      
-      <div>
-        <div class="aspect-[2/3] w-full bg-stone-100 rounded-lg overflow-hidden mb-2.5 relative">
-          <img src="${livro.capa}" alt="${livro.titulo}" class="w-full h-full object-cover" onerror="this.src='https://via.placeholder.com/150x225?text=Sem+Capa'">
-          ${livro.favorito ? '<span class="absolute bottom-1.5 left-1.5 text-sm">👑</span>' : ''}
+  container.innerHTML = livrosExibidos.map(livro => {
+    const pagAtual = livro.paginaAtual || 0;
+    const totalPag = livro.paginas || 1;
+    const porcentagem = Math.min(100, Math.round((pagAtual / totalPag) * 100));
+
+    return `
+      <div onclick="abrirDetalhes('${livro.id}')" class="bg-white p-2.5 rounded-xl border border-blush-100 shadow-sm hover:shadow transition relative group cursor-pointer flex flex-col justify-between">
+        
+        <button onclick="deletarLivro(event, '${livro.id}')" title="Excluir" class="absolute top-2 right-2 bg-stone-900/70 hover:bg-red-500 text-white w-5 h-5 rounded-full text-xs opacity-0 group-hover:opacity-100 transition z-10 flex items-center justify-center">✕</button>
+        
+        <div>
+          <div class="aspect-[2/3] w-full bg-stone-100 rounded-lg overflow-hidden mb-2.5 relative">
+            <img src="${livro.capa}" alt="${livro.titulo}" class="w-full h-full object-cover" onerror="this.src='https://via.placeholder.com/150x225?text=Sem+Capa'">
+            ${livro.favorito ? '<span class="absolute bottom-1.5 left-1.5 text-sm">👑</span>' : ''}
+          </div>
+
+          <div class="mb-1 flex items-center justify-between">
+            ${badgeStatus[livro.status] || ''}
+            ${livro.nota > 0 ? `<span class="text-[11px] font-bold text-amber-500">⭐ ${livro.nota}</span>` : ''}
+          </div>
+
+          <h4 class="font-serif font-bold text-xs text-stone-800 line-clamp-1 mt-1">${livro.titulo}</h4>
+          <p class="text-[11px] text-cozy-muted truncate">${livro.autor}</p>
+
+          <!-- BARRA DE PROGRESSO SE ESTIVER LENDO -->
+          ${livro.status === 'lendo' ? `
+            <div class="mt-2.5 pt-2 border-t border-stone-100 space-y-1">
+              <div class="flex justify-between text-[10px] font-medium text-cozy-muted">
+                <span>Pág. ${pagAtual} /${totalPag}</span>
+                <span class="font-bold text-blush-600">${porcentagem}%</span>
+              </div>
+              <div class="w-full bg-stone-100 h-1.5 rounded-full overflow-hidden">
+                <div class="bg-blush-500 h-full rounded-full transition-all" style="width: ${porcentagem}%"></div>
+              </div>
+            </div>
+          ` : ''}
+
         </div>
 
-        <div class="mb-1 flex items-center justify-between">
-          ${badgeStatus[livro.status] || ''}
-          ${livro.nota > 0 ? `<span class="text-[11px] font-bold text-amber-500">⭐ ${livro.nota}</span>` : ''}
-        </div>
-
-        <h4 class="font-serif font-bold text-xs text-stone-800 line-clamp-1 mt-1">${livro.titulo}</h4>
-        <p class="text-[11px] text-cozy-muted truncate">${livro.autor}</p>
       </div>
-
-    </div>
-  `).join('');
+    `;
+  }).join('');
 }
 
 function abrirModalCadastro() {
@@ -239,6 +262,7 @@ function selecionarLivroAPI(index) {
   const novoLivro = {
     id: Date.now().toString(),
     ...dados,
+    paginaAtual: 0,
     status: 'quero_ler',
     favorito: false,
     nota: 0,
@@ -258,6 +282,9 @@ function abrirDetalhes(id) {
 
   const container = document.getElementById('detalhes-container');
   document.getElementById('modal-detalhes').classList.remove('hidden');
+
+  const pagAtual = livro.paginaAtual || 0;
+  const porcentagem = Math.min(100, Math.round((pagAtual / livro.paginas) * 100));
 
   container.innerHTML = `
     <div class="flex flex-col sm:flex-row gap-4 mb-4">
@@ -284,6 +311,21 @@ function abrirDetalhes(id) {
       </div>
     </div>
 
+    <!-- CAMPO DE PAGINAÇÃO / PROGRESSO DA LEITURA -->
+    <div id="bloco-progresso" class="bg-blush-50/60 p-3.5 rounded-xl border border-blush-100 space-y-2 ${livro.status === 'lendo' ? '' : 'hidden'}">
+      <div class="flex justify-between items-center text-xs font-semibold text-stone-800">
+        <span>Progresso de Leitura</span>
+        <span id="label-porcentagem" class="text-blush-600 font-bold">${porcentagem}%</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-cozy-muted">Página</span>
+        <input type="number" id="input-pagina-atual" value="${pagAtual}" min="0" max="${livro.paginas}"
+               oninput="alterarPaginaAoVivo('${livro.id}', this.value)"
+               class="bg-white border border-stone-200 rounded-lg p-1.5 text-xs w-20 font-bold text-stone-800 text-center focus:outline-none focus:border-blush-400">
+        <span class="text-xs text-cozy-muted">de ${livro.paginas}</span>
+      </div>
+    </div>
+
     <div class="bg-stone-50 p-4 rounded-xl border border-stone-200 space-y-3">
       <h4 class="font-serif font-bold text-xs text-stone-800">Avaliação do Leitor</h4>
 
@@ -295,6 +337,7 @@ function abrirDetalhes(id) {
           <option value="3" ${livro.nota == 3 ? 'selected' : ''}>⭐ 3 / 5</option>
           <option value="2" ${livro.nota == 2 ? 'selected' : ''}>⭐ 2 / 5</option>
           <option value="1" ${livro.nota == 1 ? 'selected' : ''}>⭐ 1 / 5</option>
+          <option value="0" ${livro.nota == 0 ? 'selected' : ''}>Sem nota</option>
         </select>
       </div>
 
@@ -334,6 +377,24 @@ function abrirDetalhes(id) {
   `;
 }
 
+function alterarPaginaAoVivo(id, valor) {
+  const livro = biblioteca.find(l => l.id === id);
+  if (!livro) return;
+
+  let pag = Number(valor);
+  if (pag > livro.paginas) pag = livro.paginas;
+  if (pag < 0) pag = 0;
+
+  livro.paginaAtual = pag;
+  const pct = Math.min(100, Math.round((pag / livro.paginas) * 100));
+
+  const labelPorcentagem = document.getElementById('label-porcentagem');
+  if (labelPorcentagem) labelPorcentagem.innerText = `${pct}%`;
+
+  salvarStorage();
+  renderizarEstante();
+}
+
 function fecharModalDetalhes() {
   document.getElementById('modal-detalhes').classList.add('hidden');
 }
@@ -352,8 +413,15 @@ function atualizarStatus(id, novoStatus) {
   const livro = biblioteca.find(l => l.id === id);
   if (livro) {
     livro.status = novoStatus;
+    
+    // Se marcou como LIDO, assume que leu 100% das páginas
+    if (novoStatus === 'lido') {
+      livro.paginaAtual = livro.paginas;
+    }
+    
     salvarStorage();
     renderizarEstante();
+    abrirDetalhes(id);
   }
 }
 
@@ -366,7 +434,6 @@ function salvarExperiencia(id) {
       presa: Number(document.getElementById('exp-presa').value),
       pensei: Number(document.getElementById('exp-pensei').value)
     };
-    livro.status = 'lido';
     salvarStorage();
     renderizarEstante();
     fecharModalDetalhes();
