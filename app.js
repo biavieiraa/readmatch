@@ -447,10 +447,10 @@ function deletarLivro(e, id) {
 }
 
 function escolherPorMim() {
-  const naoLidos = biblioteca.filter(l => l.status === 'quero_ler');
-  const lista = naoLidos.length > 0 ? naoLidos : biblioteca.filter(l => l.status !== 'lido');
+  const naoLidos = biblioteca.filter(l => l.status !== 'lido');
+  const lista = naoLidos.length > 0 ? naoLidos : biblioteca;
 
-  if (lista.length === 0) return alert("Você não possui livros não lidos para sortear!");
+  if (lista.length === 0) return alert("Sua estante está vazia!");
   const sorteado = lista[Math.floor(Math.random() * lista.length)];
   
   document.getElementById('modal-quiz').classList.remove('hidden');
@@ -476,12 +476,6 @@ let etapaAtual = 1;
 let respostas = { vibe: '', tempo: '', genero: '' };
 
 function iniciarQuiz() {
-  const naoLidos = biblioteca.filter(l => l.status !== 'lido');
-  if (naoLidos.length === 0) {
-    alert("Você não possui livros pendentes na estante! Adicione novos títulos para fazer o Quiz.");
-    return;
-  }
-
   etapaAtual = 1;
   respostas = { vibe: '', tempo: '', genero: '' };
   document.getElementById('modal-quiz').classList.remove('hidden');
@@ -544,63 +538,136 @@ function selecionarOpcao(chave, valor, proximaEtapa) {
   renderizarEtapa();
 }
 
-function finalizarQuiz(genero) {
+async function finalizarQuiz(genero) {
   respostas.genero = genero;
-  
-  // FILTRA APENAS OS LIVROS QUE AINDA NÃO FORAM LIDOS
-  const candidatos = biblioteca.filter(livro => livro.status !== 'lido');
+  const container = document.getElementById('quiz-container');
 
-  if (candidatos.length === 0) {
-    const container = document.getElementById('quiz-container');
+  container.innerHTML = `
+    <div class="text-center py-10 space-y-3">
+      <div class="w-6 h-6 border-2 border-blush-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+      <p class="text-xs text-cozy-muted font-medium">Buscando as melhores recomendações...</p>
+    </div>
+  `;
+
+  // 1. Filtra na estante apenas os livros que ainda NÃO foram lidos
+  const pendentesEstante = biblioteca.filter(l => l.status !== 'lido');
+  let recomendados = [];
+
+  if (pendentesEstante.length > 0) {
+    recomendados = pendentesEstante.map(livro => {
+      let match = 50;
+      if (livro.genero.toLowerCase() === genero.toLowerCase()) match += 35;
+      if (livro.tags && livro.tags.includes(respostas.vibe)) match += 14;
+      return { ...livro, match: Math.min(match, 99), novidade: false };
+    }).sort((a, b) => b.match - a.match);
+  }
+
+  // 2. Se a estante não tiver opções suficientes, busca livros novos na API do Google Books
+  if (recomendados.length < 2) {
+    try {
+      const query = `subject:${encodeURIComponent(genero)}`;
+      const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${query}&maxResults=6&langRestrict=pt`);
+      const data = await res.json();
+
+      if (data.items && data.items.length > 0) {
+        const novosEncontrados = data.items
+          .filter(item => !biblioteca.some(b => b.titulo.toLowerCase() === (item.volumeInfo.title || '').toLowerCase()))
+          .map(item => {
+            const info = item.volumeInfo || {};
+            let capa = info.imageLinks?.thumbnail || info.imageLinks?.smallThumbnail || 'https://via.placeholder.com/150x225?text=Sem+Capa';
+            capa = capa.replace('http:', 'https:');
+            return {
+              id: Date.now().toString() + Math.random(),
+              titulo: info.title || 'Sem título',
+              autor: info.authors ? info.authors.join(', ') : 'Autor desconhecido',
+              paginas: info.pageCount || 280,
+              genero: genero,
+              capa: capa,
+              match: Math.floor(Math.random() * 10) + 88,
+              novidade: true
+            };
+          });
+
+        recomendados = [...recomendados, ...novosEncontrados];
+      }
+    } catch (err) {
+      console.error("Erro ao buscar livros novos:", err);
+    }
+  }
+
+  exibirResultado(recomendados.slice(0, 2));
+}
+
+function adicionarRecomendacaoNova(titulo, autor, paginas, genero, capa) {
+  const novoLivro = {
+    id: Date.now().toString(),
+    titulo,
+    autor,
+    paginas: Number(paginas) || 280,
+    paginaAtual: 0,
+    genero,
+    capa,
+    status: 'quero_ler',
+    favorito: false,
+    nota: 0,
+    tags: ['leve', genero.toLowerCase()],
+    experiencia: { emocionei: 0, presa: 0, pensei: 0 }
+  };
+
+  biblioteca.unshift(novoLivro);
+  salvarStorage();
+  renderizarEstante();
+  fecharQuiz();
+}
+
+function exibirResultado(livros) {
+  const container = document.getElementById('quiz-container');
+
+  if (livros.length === 0) {
     container.innerHTML = `
-      <div class="text-center py-4 space-y-3">
-        <span class="text-xl">📚</span>
-        <h3 class="font-serif text-base font-bold text-stone-800">Nenhum livro pendente</h3>
-        <p class="text-xs text-cozy-muted">Você já leu todos os livros cadastrados na sua estante!</p>
-        <button onclick="fecharQuiz()" class="w-full bg-blush-500 text-white font-semibold py-2 rounded-lg text-xs hover:bg-blush-600 transition cursor-pointer">
-          Fechar
-        </button>
+      <div class="text-center py-6 space-y-3">
+        <p class="text-xs text-cozy-muted">Nenhum livro encontrado para essa combinação no momento.</p>
+        <button onclick="fecharQuiz()" class="w-full bg-blush-500 text-white font-semibold py-2 rounded-lg text-xs hover:bg-blush-600 transition cursor-pointer">Fechar</button>
       </div>
     `;
     return;
   }
 
-  const recomendados = candidatos.map(livro => {
-    let match = 50;
-    if (livro.genero.toLowerCase() === genero.toLowerCase()) match += 30;
-    if (livro.tags && livro.tags.includes(respostas.vibe)) match += 18;
-    return { ...livro, match: Math.min(match, 99) };
-  }).sort((a, b) => b.match - a.match);
-
-  exibirResultado(recomendados.slice(0, 2));
-}
-
-function exibirResultado(livros) {
-  const container = document.getElementById('quiz-container');
   container.innerHTML = `
     <div class="text-center mb-3">
-      <span class="text-[10px] font-bold text-blush-500 uppercase tracking-wider">Resultado</span>
-      <h3 class="font-serif text-base font-bold text-stone-800">Próximas Leituras Sugeridas</h3>
+      <span class="text-[10px] font-bold text-blush-500 uppercase tracking-wider">Resultado Match</span>
+      <h3 class="font-serif text-base font-bold text-stone-800">Livros Sugeridos para Você</h3>
     </div>
 
-    <div class="space-y-2 max-h-72 overflow-y-auto custom-scroll pr-1">
+    <div class="space-y-2.5 max-h-72 overflow-y-auto custom-scroll pr-1">
       ${livros.map(livro => `
-        <div class="flex gap-3 p-2.5 bg-stone-50 rounded-xl border border-stone-200 items-center">
-          <img src="${livro.capa}" class="w-10 h-14 object-cover rounded shadow-sm flex-shrink-0" onerror="this.src='https://via.placeholder.com/150x225?text=Sem+Capa'">
-          <div class="flex-1 min-w-0">
-            <div class="flex justify-between items-start">
-              <h4 class="font-serif font-bold text-stone-800 truncate text-xs">${livro.titulo}</h4>
-              <span class="bg-blush-100 text-blush-600 font-bold text-[10px] px-2 py-0.5 rounded-full flex-shrink-0">
-                ${livro.match}% Match
+        <div class="p-2.5 bg-stone-50 rounded-xl border border-stone-200 space-y-2">
+          <div class="flex gap-3 items-center">
+            <img src="${livro.capa}" class="w-10 h-14 object-cover rounded shadow-sm flex-shrink-0" onerror="this.src='https://via.placeholder.com/150x225?text=Sem+Capa'">
+            <div class="flex-1 min-w-0">
+              <div class="flex justify-between items-start">
+                <h4 class="font-serif font-bold text-stone-800 truncate text-xs">${livro.titulo}</h4>
+                <span class="bg-blush-100 text-blush-600 font-bold text-[10px] px-2 py-0.5 rounded-full flex-shrink-0 ml-1">
+                  ${livro.match}% Match
+                </span>
+              </div>
+              <p class="text-[11px] text-cozy-muted truncate">${livro.autor}</p>
+              <span class="text-[9px] ${livro.novidade ? 'text-amber-600 bg-amber-50 border border-amber-100' : 'text-purple-600 bg-purple-50 border border-purple-100'} px-1.5 py-0.5 rounded font-medium inline-block mt-1">
+                ${livro.novidade ? '✨ Livro Novo da Web' : '📚 Já na sua Estante'}
               </span>
             </div>
-            <p class="text-[11px] text-cozy-muted">${livro.autor}</p>
           </div>
+
+          ${livro.novidade ? `
+            <button onclick="adicionarRecomendacaoNova('${livro.titulo.replace(/'/g, "\\'")}', '${livro.autor.replace(/'/g, "\\'")}', ${livro.paginas}, '${livro.genero}', '${livro.capa}')" class="w-full bg-blush-500 hover:bg-blush-600 text-white font-semibold py-1.5 rounded-lg text-[11px] transition cursor-pointer">
+              + Adicionar à Estante (Quero Ler)
+            </button>
+          ` : ''}
         </div>
       `).join('')}
     </div>
 
-    <button onclick="fecharQuiz()" class="w-full mt-3 bg-blush-500 text-white font-semibold py-2 rounded-lg text-xs hover:bg-blush-600 transition cursor-pointer">
+    <button onclick="fecharQuiz()" class="w-full mt-3 bg-stone-100 hover:bg-stone-200 text-stone-700 font-semibold py-2 rounded-lg text-xs transition cursor-pointer">
       Fechar
     </button>
   `;
