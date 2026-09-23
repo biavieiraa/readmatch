@@ -1,10 +1,15 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ReadMatch | Meu Cantinho Literário</title>
+  <title>ReadMatch</title>
   
+  <!-- Arquivo CSS do Django -->
+  <link rel="stylesheet" href="{% static 'style.css' %}">
+
+  <!-- Tailwind CSS & Fontes -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -65,12 +70,13 @@
         <h1 class="font-serif font-bold text-xl text-stone-800 tracking-tight">ReadMatch</h1>
       </div>
 
-      <div class="flex items-center gap-2 w-full sm:w-auto justify-end">
+      <div class="flex items-center flex-wrap gap-2 w-full sm:w-auto justify-end">
+        <div id="info-usuario-header"></div>
         <button onclick="iniciarQuiz()" class="bg-blush-50 hover:bg-blush-100 text-blush-600 border border-blush-100 font-semibold text-xs px-3.5 py-2 rounded-xl transition cursor-pointer">
-          ✨ Quiz de Match
+          Quiz de Match
         </button>
         <button onclick="escolherPorMim()" class="bg-white hover:bg-stone-50 border border-stone-200 text-stone-700 font-semibold text-xs px-3.5 py-2 rounded-xl transition cursor-pointer">
-          🎲 Sorteador
+          Sorteador
         </button>
         <button onclick="abrirModalCadastro()" class="bg-blush-500 hover:bg-blush-600 text-white font-semibold text-xs px-3.5 py-2 rounded-xl transition cursor-pointer shadow-sm">
           + Adicionar Livro
@@ -86,7 +92,7 @@
     <section class="bg-white p-5 rounded-2xl border border-blush-100 shadow-sm relative overflow-hidden">
       <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div class="space-y-1">
-          <span class="text-[11px] font-bold uppercase tracking-wider text-blush-500">Meta Anual 🎯</span>
+          <span class="text-[11px] font-bold uppercase tracking-wider text-blush-500">Meta Anual</span>
           <h2 class="font-serif text-xl font-bold text-stone-800">Desafio Literário</h2>
           <p id="meta-mensagem" class="text-xs text-cozy-muted">Carregando dados...</p>
         </div>
@@ -119,10 +125,10 @@
 
         <div class="flex flex-wrap gap-1 bg-white p-1 rounded-xl border border-stone-200 text-xs font-medium">
           <button id="btn-filtro-todos" onclick="filtrarEstante('todos')" class="btn-filtro px-3 py-1 rounded-lg transition cursor-pointer">Todos</button>
-          <button id="btn-filtro-lendo" onclick="filtrarEstante('lendo')" class="btn-filtro px-3 py-1 rounded-lg transition cursor-pointer">📖 Lendo</button>
-          <button id="btn-filtro-quero_ler" onclick="filtrarEstante('quero_ler')" class="btn-filtro px-3 py-1 rounded-lg transition cursor-pointer">💭 Quero Ler</button>
-          <button id="btn-filtro-lido" onclick="filtrarEstante('lido')" class="btn-filtro px-3 py-1 rounded-lg transition cursor-pointer">💖 Lidos</button>
-          <button id="btn-filtro-favoritos" onclick="filtrarEstante('favoritos')" class="btn-filtro px-3 py-1 rounded-lg transition cursor-pointer">👑 Favoritos</button>
+          <button id="btn-filtro-lendo" onclick="filtrarEstante('lendo')" class="btn-filtro px-3 py-1 rounded-lg transition cursor-pointer">Lendo</button>
+          <button id="btn-filtro-quero_ler" onclick="filtrarEstante('quero_ler')" class="btn-filtro px-3 py-1 rounded-lg transition cursor-pointer">Quero Ler</button>
+          <button id="btn-filtro-lido" onclick="filtrarEstante('lido')" class="btn-filtro px-3 py-1 rounded-lg transition cursor-pointer">Lidos</button>
+          <button id="btn-filtro-favoritos" onclick="filtrarEstante('favoritos')" class="btn-filtro px-3 py-1 rounded-lg transition cursor-pointer">Favoritos</button>
         </div>
       </div>
 
@@ -134,6 +140,41 @@
 
   </main>
 
+  <!-- MODAL: LOGIN / CADASTRO -->
+  <div id="modal-login" class="fixed inset-0 bg-stone-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-white rounded-2xl max-w-sm w-full p-5 shadow-xl border border-blush-100 space-y-4 relative">
+      <button onclick="fecharModalLogin()" class="absolute top-4 right-4 text-stone-400 hover:text-stone-600 text-base cursor-pointer">✕</button>
+      
+      <div class="text-center space-y-1">
+        <h3 class="font-serif font-bold text-lg text-stone-800">Entrar ou Cadastrar</h3>
+        <p class="text-xs text-cozy-muted">Acesse sua estante personalizada</p>
+      </div>
+
+      <form onsubmit="autenticarUsuario(event)" class="space-y-3">
+        <div>
+          <label class="block text-[11px] font-semibold text-stone-700 mb-1">Seu Nome (para cadastro)</label>
+          <input type="text" id="login-nome" placeholder="Seu nome" class="w-full bg-stone-50 border border-stone-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-blush-400 font-medium">
+        </div>
+        <div>
+          <label class="block text-[11px] font-semibold text-stone-700 mb-1">E-mail *</label>
+          <input type="email" id="login-email" placeholder="seu@email.com" required class="w-full bg-stone-50 border border-stone-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-blush-400 font-medium">
+        </div>
+        <div>
+          <div class="flex justify-between items-center mb-1">
+            <label class="block text-[11px] font-semibold text-stone-700">Senha *</label>
+            <button type="button" onclick="esqueciSenha()" class="text-[10px] text-blush-600 font-semibold hover:underline cursor-pointer">
+              Esqueceu a senha?
+            </button>
+          </div>
+          <input type="password" id="login-senha" placeholder="••••••••" required class="w-full bg-stone-50 border border-stone-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-blush-400 font-medium">
+        </div>
+        <button type="submit" class="w-full bg-blush-500 hover:bg-blush-600 text-white font-semibold py-2.5 rounded-xl text-xs transition cursor-pointer shadow-sm">
+          Entrar / Criar Conta
+        </button>
+      </form>
+    </div>
+  </div>
+
   <!-- MODAL: BUSCAR LIVRO -->
   <div id="modal-cadastro" class="fixed inset-0 bg-stone-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
     <div class="bg-white rounded-2xl max-w-lg w-full p-5 shadow-xl border border-blush-100 space-y-4">
@@ -143,7 +184,7 @@
           <h3 class="font-serif font-bold text-lg text-stone-800">Adicionar Livro</h3>
           <p class="text-xs text-cozy-muted">Pesquise por título ou autor para carregar a capa e os dados</p>
         </div>
-        <button onclick="fecharModalCadastro()" class="text-stone-400 hover:text-stone-600 text-base">✕</button>
+        <button onclick="fecharModalCadastro()" class="text-stone-400 hover:text-stone-600 text-base cursor-pointer">✕</button>
       </div>
 
       <form onsubmit="buscarLivrosAPI(event)" class="flex gap-2">
@@ -163,7 +204,7 @@
   <!-- MODAL: DETALHES -->
   <div id="modal-detalhes" class="fixed inset-0 bg-stone-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
     <div class="bg-white rounded-2xl max-w-lg w-full p-5 shadow-xl border border-blush-100 space-y-4 relative max-h-[90vh] overflow-y-auto custom-scroll">
-      <button onclick="fecharModalDetalhes()" class="absolute top-4 right-4 text-stone-400 hover:text-stone-600 text-base">✕</button>
+      <button onclick="fecharModalDetalhes()" class="absolute top-4 right-4 text-stone-400 hover:text-stone-600 text-base cursor-pointer">✕</button>
       <div id="detalhes-container"></div>
     </div>
   </div>
@@ -171,11 +212,12 @@
   <!-- MODAL: QUIZ / SORTEADOR -->
   <div id="modal-quiz" class="fixed inset-0 bg-stone-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
     <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-xl border border-blush-100 relative">
-      <button onclick="fecharQuiz()" class="absolute top-4 right-4 text-stone-400 hover:text-stone-600 text-base">✕</button>
+      <button onclick="fecharQuiz()" class="absolute top-4 right-4 text-stone-400 hover:text-stone-600 text-base cursor-pointer">✕</button>
       <div id="quiz-container"></div>
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <!-- Arquivo JS do Django -->
+  <script src="{% static 'app.js' %}"></script>
 </body>
 </html>
