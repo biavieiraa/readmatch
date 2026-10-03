@@ -1,42 +1,17 @@
 // --- SISTEMA DE AUTENTICAÇÃO E USUÁRIOS ---
 let usuarioAtual = JSON.parse(localStorage.getItem('readmatch_usuario_atual')) || null;
 
+// URL de capa padrão confiável caso a imagem falhe ou não exista
+const CAPA_PADRAO = 'https://placehold.co/150x225/fce7f3/c94672?text=Sem+Capa';
+
 function getChaveStorage() {
   return usuarioAtual ? `readmatch_livros_${usuarioAtual.email}` : 'readmatch_livros_visitante';
 }
 
+// Retorna array vazio por padrão (sem livros pré-cadastrados)
 function carregarBiblioteca() {
   const chave = getChaveStorage();
-  return JSON.parse(localStorage.getItem(chave)) || [
-    {
-      id: "1",
-      titulo: "A Hipótese do Amor",
-      autor: "Ali Hazelwood",
-      paginas: 336,
-      paginaAtual: 336,
-      genero: "Romance",
-      tags: ["leve", "romance"],
-      capa: "https://m.media-amazon.com/images/I/81+2u4U183L._AC_UF1000,1000_QL80_.jpg",
-      status: "lido",
-      favorito: true,
-      nota: 5,
-      experiencia: { emocionei: 4, presa: 5, pensei: 3 }
-    },
-    {
-      id: "2",
-      titulo: "Os Sete Maridos de Evelyn Hugo",
-      autor: "Taylor Jenkins Reid",
-      paginas: 360,
-      paginaAtual: 180,
-      genero: "Drama",
-      tags: ["emocionante", "drama"],
-      capa: "https://m.media-amazon.com/images/I/81xUe7v+GSL._AC_UF1000,1000_QL80_.jpg",
-      status: "lendo",
-      favorito: true,
-      nota: 0,
-      experiencia: { emocionei: 0, presa: 0, pensei: 0 }
-    }
-  ];
+  return JSON.parse(localStorage.getItem(chave)) || [];
 }
 
 let biblioteca = carregarBiblioteca();
@@ -118,6 +93,7 @@ function fazerLogout() {
   biblioteca = carregarBiblioteca();
   atualizarHeaderUsuario();
   renderizarEstante();
+  abrirModalLogin();
 }
 
 function atualizarHeaderUsuario() {
@@ -204,8 +180,10 @@ function renderizarEstante() {
 
   if (livrosExibidos.length === 0) {
     container.innerHTML = `
-      <div class="col-span-full py-10 text-center">
-        <p class="text-xs text-cozy-muted font-medium">Nenhum livro encontrado nesta categoria.</p>
+      <div class="col-span-full py-12 text-center space-y-2">
+        <span class="text-3xl">📚</span>
+        <p class="text-xs text-cozy-muted font-medium">Sua estante está vazia nesta categoria.</p>
+        <button onclick="abrirModalCadastro()" class="text-xs text-blush-600 font-bold hover:underline cursor-pointer">Adicionar o primeiro livro</button>
       </div>
     `;
     return;
@@ -228,7 +206,7 @@ function renderizarEstante() {
         <button onclick="deletarLivro(event, '${livro.id}')" title="Excluir" class="absolute top-2 right-2 bg-stone-900/70 hover:bg-red-500 text-white w-5 h-5 rounded-full text-xs opacity-0 group-hover:opacity-100 transition z-10 flex items-center justify-center">✕</button>
         <div>
           <div class="aspect-[2/3] w-full bg-stone-100 rounded-lg overflow-hidden mb-2.5 relative">
-            <img src="${livro.capa}" alt="${livro.titulo}" class="w-full h-full object-cover" onerror="this.src='https://via.placeholder.com/150x225?text=Sem+Capa'">
+            <img src="${livro.capa}" alt="${livro.titulo}" class="w-full h-full object-cover" onerror="this.onerror=null; this.src='${CAPA_PADRAO}';">
             ${livro.favorito ? '<span class="absolute bottom-1.5 left-1.5 text-[10px] font-bold bg-white/90 text-blush-600 px-1.5 py-0.5 rounded border border-blush-100 shadow-sm">Favorito</span>' : ''}
           </div>
           <div class="mb-1 flex items-center justify-between">
@@ -254,7 +232,7 @@ function renderizarEstante() {
   }).join('');
 }
 
-// --- BUSCA MANUALE ADIÇÃO DE LIVROS ---
+// --- BUSCA MANUAL E ADIÇÃO DE LIVROS (COM BUSCA DUPLA DE SEGURANÇA) ---
 function abrirModalCadastro() {
   document.getElementById('modal-cadastro').classList.remove('hidden');
 }
@@ -266,58 +244,102 @@ function fecharModalCadastro() {
 }
 
 async function buscarLivrosAPI(e) {
-  e.preventDefault();
-  const query = document.getElementById('input-busca-api').value.trim();
+  if (e) e.preventDefault();
+  
+  const input = document.getElementById('input-busca-api');
+  const query = input ? input.value.trim() : '';
   const container = document.getElementById('container-resultados');
   const btn = document.getElementById('btn-buscar-api');
 
-  if (!query) return;
+  if (!query) {
+    alert("Digite o nome de um livro ou autor para buscar.");
+    return;
+  }
 
-  btn.innerText = "Buscando...";
-  btn.disabled = true;
+  if (btn) {
+    btn.innerText = "Buscando...";
+    btn.disabled = true;
+  }
+
+  container.innerHTML = `<p class="text-xs text-cozy-muted text-center py-8 animate-pulse">Pesquisando nas bibliotecas...</p>`;
   resultadosBuscaAPI = [];
 
+  // 1. TENTATIVA 1: Google Books API
   try {
-    const resGB = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=5`);
-    const dataGB = await resGB.json();
-
-    if (dataGB.items && dataGB.items.length > 0) {
-      resultadosBuscaAPI = dataGB.items.map(item => {
-        const info = item.volumeInfo || {};
-        let capa = info.imageLinks?.thumbnail || info.imageLinks?.smallThumbnail || 'https://via.placeholder.com/150x225?text=Sem+Capa';
-        return {
-          titulo: info.title || 'Sem título',
-          autor: info.authors ? info.authors.join(', ') : 'Autor desconhecido',
-          paginas: info.pageCount || 280,
-          genero: info.categories ? info.categories[0].split('/')[0].trim() : 'Ficção',
-          capa: capa.replace('http:', 'https:')
-        };
-      });
+    const resGB = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=8`);
+    if (resGB.ok) {
+      const dataGB = await resGB.json();
+      if (dataGB.items && dataGB.items.length > 0) {
+        resultadosBuscaAPI = dataGB.items.map(item => {
+          const info = item.volumeInfo || {};
+          let capa = info.imageLinks?.thumbnail || info.imageLinks?.smallThumbnail || CAPA_PADRAO;
+          if (capa.startsWith('http:')) {
+            capa = capa.replace('http:', 'https:');
+          }
+          return {
+            titulo: info.title || 'Sem título',
+            autor: info.authors ? info.authors.join(', ') : 'Autor desconhecido',
+            paginas: info.pageCount || 280,
+            genero: info.categories ? info.categories[0].split('/')[0].trim() : 'Ficção',
+            capa: capa
+          };
+        });
+      }
     }
+  } catch (err) {
+    console.warn("Google Books indisponível, tentando servidor secundário...", err);
+  }
 
-    if (resultadosBuscaAPI.length === 0) {
-      container.innerHTML = `<p class="text-xs text-stone-400 text-center py-8">Nenhum resultado encontrado para "${query}".</p>`;
-      return;
+  // 2. TENTATIVA 2 (FALLBACK): Open Library API (Caso o Google falhe ou seja bloqueado)
+  if (resultadosBuscaAPI.length === 0) {
+    try {
+      const resOL = await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&limit=8`);
+      if (resOL.ok) {
+        const dataOL = await resOL.json();
+        if (dataOL.docs && dataOL.docs.length > 0) {
+          resultadosBuscaAPI = dataOL.docs.map(doc => {
+            const capaId = doc.cover_i;
+            const capa = capaId ? `https://covers.openlibrary.org/b/id/${capaId}-M.jpg` : CAPA_PADRAO;
+            return {
+              titulo: doc.title || 'Sem título',
+              autor: doc.author_name ? doc.author_name.join(', ') : 'Autor desconhecido',
+              paginas: doc.number_of_pages_median || 280,
+              genero: doc.subject ? doc.subject[0] : 'Ficção',
+              capa: capa
+            };
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Erro no servidor secundário:", err);
     }
+  }
 
+  // 3. RENDERIZAÇÃO DOS RESULTADOS
+  if (resultadosBuscaAPI.length === 0) {
+    container.innerHTML = `
+      <div class="text-center py-8 space-y-1">
+        <p class="text-xs text-stone-600 font-bold">Nenhum livro encontrado para "${query}".</p>
+        <p class="text-[11px] text-stone-400">Tente buscar apenas o nome principal do livro ou autor.</p>
+      </div>
+    `;
+  } else {
     container.innerHTML = resultadosBuscaAPI.map((item, index) => `
       <div class="flex items-center gap-3 p-2 bg-stone-50 hover:bg-blush-50/50 rounded-xl border border-stone-200 transition">
-        <img src="${item.capa}" class="w-10 h-14 object-cover rounded shadow-sm" onerror="this.src='https://via.placeholder.com/150x225?text=Sem+Capa'">
+        <img src="${item.capa}" class="w-10 h-14 object-cover rounded shadow-sm flex-shrink-0" onerror="this.onerror=null; this.src='${CAPA_PADRAO}';">
         <div class="flex-1 min-w-0">
           <h5 class="font-serif font-bold text-xs text-stone-800 truncate">${item.titulo}</h5>
           <p class="text-[11px] text-cozy-muted truncate">${item.autor}</p>
           <span class="text-[10px] bg-white px-2 py-0.5 rounded border border-stone-200 text-stone-600 mt-1 inline-block">${item.paginas} págs • ${item.genero}</span>
         </div>
-        <button onclick="selecionarLivroAPI(${index})" class="bg-blush-500 hover:bg-blush-600 text-white font-semibold text-xs px-3 py-1.5 rounded-lg transition cursor-pointer">
+        <button type="button" onclick="selecionarLivroAPI(${index})" class="bg-blush-500 hover:bg-blush-600 text-white font-semibold text-xs px-3 py-1.5 rounded-lg transition cursor-pointer">
           Adicionar
         </button>
       </div>
     `).join('');
+  }
 
-  } catch (err) {
-    console.error("Erro na busca:", err);
-    container.innerHTML = `<p class="text-xs text-red-500 text-center py-8">Erro na conexão. Tente novamente.</p>`;
-  } finally {
+  if (btn) {
     btn.innerText = "Buscar";
     btn.disabled = false;
   }
@@ -357,7 +379,7 @@ function abrirDetalhes(id) {
 
   container.innerHTML = `
     <div class="flex flex-col sm:flex-row gap-4 mb-4">
-      <img src="${livro.capa}" class="w-28 h-40 object-cover rounded-xl shadow-md mx-auto sm:mx-0 flex-shrink-0" onerror="this.src='https://via.placeholder.com/150x225?text=Sem+Capa'">
+      <img src="${livro.capa}" class="w-28 h-40 object-cover rounded-xl shadow-md mx-auto sm:mx-0 flex-shrink-0" onerror="this.onerror=null; this.src='${CAPA_PADRAO}';">
       <div class="space-y-2 text-center sm:text-left flex-1">
         <div class="flex items-center justify-between">
           <span class="text-[10px] font-bold uppercase tracking-wider text-blush-500 bg-blush-50 px-2 py-0.5 rounded">${livro.genero}</span>
@@ -482,7 +504,7 @@ function escolherPorMim() {
   const naoLidos = biblioteca.filter(l => l.status !== 'lido');
   const lista = naoLidos.length > 0 ? naoLidos : biblioteca;
 
-  if (lista.length === 0) return alert("Sua estante está vazia!");
+  if (lista.length === 0) return alert("Sua estante está vazia! Adicione livros antes de sortear.");
   const sorteado = lista[Math.floor(Math.random() * lista.length)];
   
   document.getElementById('modal-quiz').classList.remove('hidden');
@@ -492,7 +514,7 @@ function escolherPorMim() {
       <h3 class="font-serif text-lg font-bold text-stone-800">Livro sugerido:</h3>
       
       <div class="bg-stone-50 p-3 rounded-xl border border-stone-200 flex flex-col items-center">
-        <img src="${sorteado.capa}" class="w-24 h-36 object-cover rounded-md shadow mb-2" onerror="this.src='https://via.placeholder.com/150x225?text=Sem+Capa'">
+        <img src="${sorteado.capa}" class="w-24 h-36 object-cover rounded-md shadow mb-2" onerror="this.onerror=null; this.src='${CAPA_PADRAO}';">
         <h4 class="font-serif font-bold text-stone-800 text-sm">${sorteado.titulo}</h4>
         <p class="text-xs text-cozy-muted">${sorteado.autor} • ${sorteado.paginas} págs</p>
       </div>
@@ -504,7 +526,7 @@ function escolherPorMim() {
   `;
 }
 
-// --- QUIZ & ALGORITMO ROBUSTO DE RECOMENDAÇÃO ---
+// --- QUIZ DE MATCH ---
 let etapaAtual = 1;
 let respostas = { vibe: '', tempo: '', genero: '' };
 
@@ -584,7 +606,6 @@ async function finalizarQuiz(genero) {
 
   let recomendados = [];
 
-  // 1. Tenta buscar na estante do usuário
   const pendentesEstante = biblioteca.filter(l => l.status !== 'lido');
   if (pendentesEstante.length > 0) {
     recomendados = pendentesEstante.map(livro => {
@@ -597,10 +618,8 @@ async function finalizarQuiz(genero) {
     .sort((a, b) => b.match - a.match);
   }
 
-  // 2. Se a estante não tiver opções suficientes, faz busca com MÚLTIPLOS fallbacks na API
   if (recomendados.length < 2) {
     try {
-      // Lista de termos para buscar na API até achar livros
       const termosBusca = [
         `livro ${genero.toLowerCase()}`,
         `${genero.toLowerCase()} ${respostas.vibe}`,
@@ -622,14 +641,17 @@ async function finalizarQuiz(genero) {
             })
             .map(item => {
               const info = item.volumeInfo || {};
-              let capa = info.imageLinks?.thumbnail || info.imageLinks?.smallThumbnail || 'https://via.placeholder.com/150x225?text=Sem+Capa';
+              let capa = info.imageLinks?.thumbnail || info.imageLinks?.smallThumbnail || CAPA_PADRAO;
+              if (capa.startsWith('http:')) {
+                capa = capa.replace('http:', 'https:');
+              }
               return {
                 id: Date.now().toString() + Math.random(),
                 titulo: info.title || 'Sem título',
                 autor: info.authors ? info.authors.join(', ') : 'Autor desconhecido',
                 paginas: info.pageCount || (respostas.tempo === 'curto' ? 220 : 380),
                 genero: genero,
-                capa: capa.replace('http:', 'https:'),
+                capa: capa,
                 match: Math.floor(Math.random() * 8) + 91,
                 novidade: true
               };
@@ -674,7 +696,7 @@ function exibirResultado(livros) {
   if (livros.length === 0) {
     container.innerHTML = `
       <div class="text-center py-6 space-y-3">
-        <p class="text-xs text-cozy-muted">Não foi possível carregar livros no momento. Tente novamente em instantes.</p>
+        <p class="text-xs text-cozy-muted">Não foi possível carregar recomendações no momento. Tente novamente.</p>
         <button onclick="fecharQuiz()" class="w-full bg-blush-500 text-white font-semibold py-2 rounded-lg text-xs hover:bg-blush-600 transition cursor-pointer">Fechar</button>
       </div>
     `;
@@ -691,7 +713,7 @@ function exibirResultado(livros) {
       ${livros.map(livro => `
         <div class="p-2.5 bg-stone-50 rounded-xl border border-stone-200 space-y-2">
           <div class="flex gap-3 items-center">
-            <img src="${livro.capa}" class="w-10 h-14 object-cover rounded shadow-sm flex-shrink-0" onerror="this.src='https://via.placeholder.com/150x225?text=Sem+Capa'">
+            <img src="${livro.capa}" class="w-10 h-14 object-cover rounded shadow-sm flex-shrink-0" onerror="this.onerror=null; this.src='${CAPA_PADRAO}';">
             <div class="flex-1 min-w-0">
               <div class="flex justify-between items-start">
                 <h4 class="font-serif font-bold text-stone-800 truncate text-xs">${livro.titulo}</h4>
@@ -721,6 +743,13 @@ function exibirResultado(livros) {
   `;
 }
 
-// Inicialização
-atualizarHeaderUsuario();
-filtrarEstante('todos');
+// INICIALIZAÇÃO DA PÁGINA
+document.addEventListener('DOMContentLoaded', () => {
+  atualizarHeaderUsuario();
+  filtrarEstante('todos');
+
+  // Abre a tela de login imediatamente se o usuário não estiver logado
+  if (!usuarioAtual) {
+    abrirModalLogin();
+  }
+});
