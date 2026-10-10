@@ -1,6 +1,7 @@
 
 /* ==========================================================
    READMATCH — JavaScript completo
+   Recomendações com filtros reais de vibe, gênero e tamanho
    ========================================================== */
 
 const CAPA_PADRAO = 'https://placehold.co/150x225/fce7f3/c94672?text=Sem+Capa';
@@ -19,6 +20,10 @@ let metaLeitura = Number(localStorage.getItem(CHAVE_META)) || 12;
 
 const cacheRecomendacoes = new Map();
 let googleBooksBloqueadoAte = 0;
+
+/* ==========================================================
+   ARMAZENAMENTO E UTILITÁRIOS
+   ========================================================== */
 
 function getChaveStorage() {
   return usuarioAtual
@@ -70,6 +75,12 @@ function limitarTempo(promise, ms = 9000) {
       setTimeout(() => rejeitar(new Error('Tempo limite excedido')), ms)
     )
   ]);
+}
+
+function normalizarLista(lista) {
+  return (Array.isArray(lista) ? lista : [])
+    .map(normalizar)
+    .filter(Boolean);
 }
 
 /* ==========================================================
@@ -139,7 +150,14 @@ function esqueciSenha() {
 
   if (!email) return;
 
-  const usuarios = JSON.parse(localStorage.getItem(CHAVE_USUARIOS)) || [];
+  let usuarios = [];
+
+  try {
+    usuarios = JSON.parse(localStorage.getItem(CHAVE_USUARIOS)) || [];
+  } catch {
+    usuarios = [];
+  }
+
   const usuario = usuarios.find(u => u.email === email.trim().toLowerCase());
 
   if (!usuario) {
@@ -356,14 +374,16 @@ function normalizarLivroAPI(item) {
 
   if (capa.startsWith('http:')) capa = capa.replace('http:', 'https:');
 
+  const categorias = Array.isArray(info.categories) ? info.categories : [];
+
   return {
     titulo: info.title || 'Sem título',
     autor: info.authors?.join(', ') || 'Autor desconhecido',
     paginas: Number(info.pageCount) > 0 ? Number(info.pageCount) : null,
-    genero: info.categories?.[0]?.split('/')[0]?.trim() || '',
+    genero: categorias[0]?.split('/')[0]?.trim() || '',
     capa,
     descricao: info.description || '',
-    tags: []
+    tags: categorias.flatMap(c => c.split(/[\/,]/)).map(normalizar)
   };
 }
 
@@ -419,7 +439,7 @@ async function buscarLivrosAPI(e) {
           titulo: doc.title || 'Sem título',
           autor: doc.author_name?.join(', ') || 'Autor desconhecido',
           paginas: Number(doc.number_of_pages_median) || null,
-          genero: doc.subject?.[0] || '',
+          genero: detectarGenero(doc.subject || []),
           capa: doc.cover_i
             ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`
             : CAPA_PADRAO,
@@ -706,74 +726,195 @@ function escolherPorMim() {
 }
 
 /* ==========================================================
-   CÁLCULO DE COMPATIBILIDADE DO MATCH
+   LÓGICA DE COMPATIBILIDADE
    ========================================================== */
 
+/*
+  A vibe não é determinada apenas pelo gênero.
+  Para recomendar uma história de amor, por exemplo, o sistema
+  procura sinais de relacionamento na descrição, título ou tags.
+*/
+
 const TAGS_POR_VIBE = {
-  leve: ['leve', 'divertido', 'confortavel', 'fofo', 'feel good', 'comedia', 'romance leve'],
-  emocionante: ['emocionante', 'triste', 'drama', 'emocao', 'chorar', 'luto', 'familia', 'melancolico'],
-  presa: ['envolvente', 'ritmo rapido', 'rapido', 'suspense', 'plot twist', 'viciante', 'misterio'],
-  pensar: ['reflexivo', 'filosofico', 'complexo', 'existencial', 'introspectivo'],
-  romance: ['romance', 'amor', 'relacionamento', 'slow burn', 'enemies to lovers', 'friends to lovers']
+  leve: [
+    'leve', 'divertido', 'confortavel', 'fofo', 'feel good',
+    'comedia romantica', 'romance leve', 'bem humorado',
+    'lighthearted', 'heartwarming', 'humor'
+  ],
+  emocionante: [
+    'emocionante', 'triste', 'drama', 'emocao', 'chorar',
+    'luto', 'familia', 'melancolico', 'emotional', 'heartbreak',
+    'grief', 'moving'
+  ],
+  presa: [
+    'envolvente', 'ritmo rapido', 'rapido', 'suspense',
+    'plot twist', 'viciante', 'misterio', 'page turner',
+    'thriller', 'mystery', 'intriga'
+  ],
+  pensar: [
+    'reflexivo', 'filosofico', 'complexo', 'existencial',
+    'introspectivo', 'reflexao', 'philosophical',
+    'existential', 'thought provoking'
+  ],
+  romance: [
+    'historia de amor', 'relacionamento amoroso',
+    'relacao amorosa', 'romance', 'love story',
+    'fall in love', 'falls in love', 'romantic relationship',
+    'romantic', 'love interest', 'love interests',
+    'enemies to lovers', 'friends to lovers', 'slow burn',
+    'second chance romance', 'first love', 'couple'
+  ]
 };
+
+function textoDoLivro(livro) {
+  return normalizar([
+    livro.titulo || '',
+    livro.descricao || '',
+    ...(Array.isArray(livro.tags) ? livro.tags : [])
+  ].join(' '));
+}
 
 function pontuarVibe(livro, vibe) {
   const pistas = TAGS_POR_VIBE[vibe] || [];
   if (!pistas.length) return null;
 
-  const texto = normalizar([
-    livro.genero || '',
-    livro.titulo || '',
-    livro.descricao || '',
-    ...(livro.tags || [])
-  ].join(' '));
+  const titulo = normalizar(livro.titulo);
+  const descricao = normalizar(livro.descricao);
+  const tags = normalizarLista(livro.tags);
 
-  if (!texto.trim()) return null;
+  const achadosDescricao = pistas.filter(p => descricao.includes(normalizar(p)));
+  const achadosTitulo = pistas.filter(p => titulo.includes(normalizar(p)));
+  const achadosTags = pistas.filter(p =>
+    tags.some(tag => tag.includes(normalizar(p)))
+  );
 
-  const encontrados = pistas.filter(p => texto.includes(normalizar(p)));
-  return encontrados.length ? Math.min(1, encontrados.length / 2) : 0;
+  /*
+    Uma categoria genérica "Romance" não é suficiente para
+    provar que a história é centrada em amor.
+  */
+  if (vibe === 'romance') {
+    const pistasFortes = [
+      'historia de amor', 'relacionamento amoroso',
+      'relacao amorosa', 'love story', 'falls in love',
+      'fall in love', 'romantic relationship', 'love interest',
+      'love interests', 'enemies to lovers', 'friends to lovers',
+      'slow burn', 'second chance romance', 'first love'
+    ];
+
+    const descricaoForte = pistasFortes.some(p => descricao.includes(p));
+    const tituloForte = pistasForte.some(p => titulo.includes(p));
+    const tagsFortes = pistasFortes.some(p =>
+      tags.some(tag => tag.includes(p))
+    );
+
+    const descricaoTemRomance = [
+      'love', 'romantic', 'relationship', 'couple',
+      'enamored', 'dating', 'boyfriend', 'girlfriend',
+      'namoro', 'amor', 'casal', 'paixao', 'relacionamento',
+      'apaixon'
+    ].some(p => descricao.includes(p));
+
+    const tituloTemSinal = [
+      'love', 'amor', 'paixao', 'beijo', 'kiss',
+      'romance', 'coraçao', 'coracao'
+    ].some(p => titulo.includes(p));
+
+    if (descricaoForte || tituloForte || tagsFortes) return 1;
+    if (descricaoTemRomance) return 0.8;
+    if (tituloTemSinal) return 0.55;
+
+    // Tags isoladas e categorias genéricas não confirmam a vibe.
+    return 0;
+  }
+
+  const pontos = new Set([
+    ...achadosDescricao,
+    ...achadosTitulo,
+    ...achadosTags
+  ]);
+
+  if (!pontos.size) return 0;
+
+  if (achadosDescricao.length) return Math.min(1, 0.65 + pontos.size * 0.1);
+  if (achadosTitulo.length) return 0.55;
+  return 0.35;
 }
 
 function pontuarGenero(livro, desejado) {
-  const genero = normalizar(livro.genero);
   const pedido = normalizar(desejado);
-  const tags = (livro.tags || []).map(normalizar);
 
   if (!pedido || pedido === 'qualquer') return null;
-  if (!genero && !tags.length) return null;
-  if (genero.includes(pedido) || pedido.includes(genero)) return 1;
-  if (tags.some(t => t.includes(pedido) || pedido.includes(t))) return 1;
+
+  const genero = normalizar(livro.genero);
+  const tags = normalizarLista(livro.tags);
+  const assuntos = [genero, ...tags].filter(Boolean);
+
+  if (!assuntos.length) return 0;
 
   const grupos = {
-    romance: ['romance', 'romantic', 'love'],
-    drama: ['drama', 'fiction', 'ficcao', 'literature'],
-    ficcao: ['fiction', 'ficcao', 'fantasy', 'fantasia', 'distopia'],
-    suspense: ['mystery', 'misterio', 'thriller', 'suspense', 'crime'],
-    fantasia: ['fantasy', 'fantasia', 'magia'],
-    'young adult': ['young adult', 'adolescent', 'juvenile'],
-    'nao ficcao': ['nonfiction', 'non-fiction', 'biography', 'autobiography']
+    romance: [
+      'romance', 'romantic fiction', 'romantic novels',
+      'love stories', 'historias de amor'
+    ],
+    drama: [
+      'drama', 'domestic fiction', 'family saga',
+      'literary fiction'
+    ],
+    ficcao: [
+      'fiction', 'ficcao', 'literary fiction',
+      'contemporary fiction', 'speculative fiction'
+    ],
+    suspense: [
+      'mystery', 'misterio', 'thriller', 'suspense',
+      'crime', 'detective', 'policial'
+    ],
+    fantasia: [
+      'fantasy', 'fantasia', 'magic', 'magia',
+      'high fantasy', 'urban fantasy'
+    ],
+    'young adult': [
+      'young adult', 'ya fiction', 'adolescent',
+      'juvenile fiction', 'teen fiction'
+    ],
+    'nao ficcao': [
+      'nonfiction', 'non-fiction', 'biography',
+      'autobiography', 'self-help', 'history'
+    ]
   };
 
   const familia = grupos[pedido] || [pedido];
-  return familia.some(t => genero.includes(t) || tags.some(tag => tag.includes(t)))
-    ? 0.65
-    : 0;
+
+  if (assuntos.some(t => t === pedido)) return 1;
+
+  if (assuntos.some(t => familia.some(f => t === f))) return 1;
+
+  if (assuntos.some(t => familia.some(f =>
+    t.includes(f) && f.length >= 5
+  ))) return 0.75;
+
+  /*
+    Não tratar qualquer livro de ficção como romance.
+    Um livro só passa se houver indício do gênero solicitado.
+  */
+  return 0;
 }
 
 function pontuarTamanho(livro, tempo) {
+  if (!tempo || tempo === 'qualquer') return null;
+
   const paginas = Number(livro.paginas);
-  if (!Number.isFinite(paginas) || paginas <= 0) return null;
+  if (!Number.isFinite(paginas) || paginas <= 0) return 0;
 
   if (tempo === 'curto') {
     if (paginas <= 280) return 1;
-    if (paginas <= 320) return 0.5;
+    if (paginas <= 300) return 0.5;
     return 0;
   }
 
   if (tempo === 'medio') {
     if (paginas >= 300 && paginas <= 450) return 1;
-    if (paginas >= 260 && paginas < 300) return 0.6;
-    if (paginas > 450 && paginas <= 500) return 0.6;
+    if (paginas >= 280 && paginas < 300) return 0.5;
+    if (paginas > 450 && paginas <= 500) return 0.5;
     return 0;
   }
 
@@ -782,12 +923,12 @@ function pontuarTamanho(livro, tempo) {
 
 function extrairCaracteristicasLivro(livro) {
   const ignorar = new Set([
-    'book', 'books', 'fiction', 'ficcao', 'literature', 'literatura',
-    'novel', 'novels', 'general', 'geral', 'unknown'
+    'book', 'books', 'fiction', 'ficcao', 'literature',
+    'literatura', 'novel', 'novels', 'general', 'geral',
+    'unknown', 'romance'
   ]);
 
-  const tags = (livro.tags || [])
-    .map(normalizar)
+  const tags = normalizarLista(livro.tags)
     .filter(t => t.length > 2 && !ignorar.has(t));
 
   const descricao = normalizar(livro.descricao || '');
@@ -808,11 +949,9 @@ function similaridadeLivros(livroA, livroB) {
   let peso = 0;
 
   if (a.genero && b.genero) {
-    const afinidade = a.genero === b.genero ||
-      a.genero.includes(b.genero) || b.genero.includes(a.genero) ? 1 : 0;
-
-    soma += afinidade * 0.55;
-    peso += 0.55;
+    const afinidade = a.genero === b.genero ? 1 : 0;
+    soma += afinidade * 0.35;
+    peso += 0.35;
   }
 
   const conjuntoA = new Set(a.palavras);
@@ -820,9 +959,13 @@ function similaridadeLivros(livroA, livroB) {
 
   if (conjuntoA.size && conjuntoB.size) {
     const comuns = [...conjuntoA].filter(t => conjuntoB.has(t)).length;
-    const jaccard = comuns / Math.max(1, conjuntoA.size + conjuntoB.size - comuns);
-    soma += jaccard * 0.45;
-    peso += 0.45;
+    const jaccard = comuns / Math.max(
+      1,
+      conjuntoA.size + conjuntoB.size - comuns
+    );
+
+    soma += jaccard * 0.65;
+    peso += 0.65;
   }
 
   return peso ? Math.max(0, Math.min(1, soma / peso)) : null;
@@ -830,7 +973,9 @@ function similaridadeLivros(livroA, livroB) {
 
 function pontuarPerfil(livro, livrosUsuario) {
   const avaliados = livrosUsuario.filter(l =>
-    l.status === 'lido' && Number(l.nota) >= 1 && Number(l.nota) <= 5
+    l.status === 'lido' &&
+    Number(l.nota) >= 1 &&
+    Number(l.nota) <= 5
   );
 
   if (!avaliados.length) return null;
@@ -844,6 +989,7 @@ function pontuarPerfil(livro, livrosUsuario) {
 
     const nota = Number(avaliado.nota);
     const peso = Math.abs(nota - 3);
+
     if (!peso) continue;
 
     soma += (nota > 3 ? similaridade : -similaridade) * peso;
@@ -852,47 +998,94 @@ function pontuarPerfil(livro, livrosUsuario) {
 
   if (!pesoTotal) return null;
 
-  return Math.max(0.05, Math.min(0.98, 0.5 + (soma / pesoTotal) * 0.48));
+  return Math.max(0, Math.min(1, 0.5 + (soma / pesoTotal) * 0.5));
 }
 
 function calcularMatch(livro, respostasQuiz, livrosUsuario = biblioteca) {
+  const vibe = pontuarVibe(livro, respostasQuiz.vibe);
+  const genero = pontuarGenero(livro, respostasQuiz.genero);
+  const tamanho = pontuarTamanho(livro, respostasQuiz.tempo);
   const perfil = pontuarPerfil(livro, livrosUsuario);
 
+  /*
+    O perfil pessoal passa a ser complementar.
+    Vibe e gênero têm prioridade sobre as avaliações anteriores.
+  */
   const criterios = [
-    { nome: 'seu histórico de leitura', peso: 50, valor: perfil },
-    { nome: 'seu momento', peso: 25, valor: pontuarVibe(livro, respostasQuiz.vibe) },
-    { nome: 'gênero escolhido', peso: 15, valor: pontuarGenero(livro, respostasQuiz.genero) },
-    { nome: 'tamanho do livro', peso: 10, valor: pontuarTamanho(livro, respostasQuiz.tempo) }
+    { nome: 'vibe escolhida', peso: 45, valor: vibe },
+    { nome: 'gênero escolhido', peso: 35, valor: genero },
+    { nome: 'tamanho do livro', peso: 15, valor: tamanho },
+    { nome: 'perfil de leitura', peso: 5, valor: perfil }
   ].filter(c => c.valor !== null && Number.isFinite(c.valor));
 
   if (!criterios.length) {
-    return { porcentagem: null, motivos: ['Ainda faltam informações para avaliar este livro.'] };
+    return {
+      porcentagem: 0,
+      motivos: ['Não há informações suficientes para avaliar este livro.']
+    };
   }
 
   const pesoTotal = criterios.reduce((s, c) => s + c.peso, 0);
   const pontos = criterios.reduce((s, c) => s + c.valor * c.peso, 0);
   const motivos = [];
 
-  if (perfil !== null) motivos.push('A pontuação considera suas avaliações anteriores.');
+  if (vibe >= 0.8) {
+    motivos.push('A descrição ou as características do livro combinam com a vibe escolhida.');
+  } else if (vibe > 0) {
+    motivos.push('Há alguns indícios de compatibilidade com a vibe escolhida.');
+  }
 
-  if (respostasQuiz.genero && respostasQuiz.genero !== 'Qualquer') {
-    motivos.push(`Sugestão para o gênero ${respostasQuiz.genero}.`);
+  if (genero >= 0.75) {
+    motivos.push(`O gênero ou os assuntos cadastrados correspondem a ${respostasQuiz.genero}.`);
   }
 
   if (respostasQuiz.tempo === 'curto' && Number(livro.paginas) > 0 && Number(livro.paginas) <= 280) {
-    motivos.push('O número de páginas combina com o tamanho escolhido.');
+    motivos.push(`O livro tem ${livro.paginas} páginas, dentro do limite de 280.`);
   }
 
   if (respostasQuiz.tempo === 'medio' && Number(livro.paginas) >= 300 && Number(livro.paginas) <= 450) {
-    motivos.push('O número de páginas combina com o tamanho escolhido.');
+    motivos.push('O número de páginas está na faixa de tamanho médio escolhida.');
   }
 
-  if (!motivos.length) motivos.push('Sugestão baseada nas respostas do quiz.');
+  if (perfil !== null && perfil >= 0.7) {
+    motivos.push('Também há semelhanças com livros bem avaliados por você.');
+  }
+
+  if (!motivos.length) {
+    motivos.push('Os dados disponíveis ainda não permitem justificar uma compatibilidade forte.');
+  }
 
   return {
     porcentagem: Math.round(pontos / pesoTotal * 100),
-    motivos: [...new Set(motivos)]
+    motivos
   };
+}
+
+/*
+  Filtro obrigatório: o livro só pode ser recomendado se passar
+  nos critérios essenciais. Uma boa nota não compensa uma vibe
+  ou um gênero incompatível.
+*/
+function livroAtendeRespostas(livro, respostasQuiz) {
+  const vibe = pontuarVibe(livro, respostasQuiz.vibe);
+  const genero = pontuarGenero(livro, respostasQuiz.genero);
+  const tamanho = pontuarTamanho(livro, respostasQuiz.tempo);
+
+  if (respostasQuiz.vibe && (vibe === null || vibe < 0.5)) return false;
+
+  if (
+    respostasQuiz.genero &&
+    respostasQuiz.genero !== 'Qualquer' &&
+    (genero === null || genero < 0.75)
+  ) return false;
+
+  if (
+    respostasQuiz.tempo &&
+    respostasQuiz.tempo !== 'qualquer' &&
+    (tamanho === null || tamanho < 1)
+  ) return false;
+
+  return true;
 }
 
 /* ==========================================================
@@ -981,12 +1174,32 @@ function normalizarResultadoGoogle(item) {
     titulo: info.title || '',
     autor: info.authors?.join(', ') || 'Autor desconhecido',
     paginas: Number(info.pageCount) > 0 ? Number(info.pageCount) : null,
-    genero: categorias[0]?.split('/')[0]?.trim() || '',
+    genero: detectarGenero(categorias),
     capa,
     descricao: info.description || '',
     tags: categorias.flatMap(c => c.split(/[\/,]/)).map(normalizar).filter(Boolean),
     novidade: true
   };
+}
+
+function detectarGenero(assuntos) {
+  const texto = normalizar((Array.isArray(assuntos) ? assuntos : [assuntos]).join(' '));
+
+  const regras = [
+    ['nao ficcao', ['nonfiction', 'non-fiction', 'self-help', 'biography']],
+    ['young adult', ['young adult', 'ya fiction', 'juvenile fiction', 'teen fiction']],
+    ['suspense', ['mystery', 'thriller', 'crime fiction', 'detective']],
+    ['fantasia', ['fantasy', 'fantasia', 'magic', 'high fantasy']],
+    ['romance', ['romance', 'romantic fiction', 'love stories']],
+    ['drama', ['drama', 'family saga', 'domestic fiction']],
+    ['ficcao', ['fiction', 'literary fiction', 'contemporary fiction']]
+  ];
+
+  for (const [genero, termos] of regras) {
+    if (termos.some(t => texto.includes(t))) return genero;
+  }
+
+  return '';
 }
 
 async function buscarRecomendacoesExternas(genero, livrosUsuario = biblioteca) {
@@ -1002,50 +1215,50 @@ async function buscarRecomendacoesExternas(genero, livrosUsuario = biblioteca) {
   };
 
   const consultaBase = termos[genero] || 'popular fiction novel';
-  const avaliadosBem = livrosUsuario.filter(l => l.status === 'lido' && Number(l.nota) >= 4);
-
-  const pistas = [
-    ...new Set(avaliadosBem.map(l => String(l.genero || '').trim()).filter(Boolean))
-  ].slice(0, 2).join(' ');
-
-  const consulta = `${consultaBase} ${pistas}`.trim();
-  const chaveCache = normalizar(`${genero}|${consulta}`);
+  const chaveCache = normalizar(`${genero}|${consultaBase}`);
 
   if (cacheRecomendacoes.has(chaveCache)) {
-    return cacheRecomendacoes.get(chaveCache).map(l => ({ ...l, tags: [...(l.tags || [])] }));
+    return cacheRecomendacoes.get(chaveCache).map(l => ({
+      ...l,
+      tags: [...(l.tags || [])]
+    }));
   }
 
   let livros = [];
 
-  // Primeira tentativa: Google Books, exceto quando está temporariamente limitado.
   if (Date.now() >= googleBooksBloqueadoAte) {
     try {
-      const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(consulta)}&maxResults=20&orderBy=relevance`;
+      const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(consultaBase)}&maxResults=40&orderBy=relevance`;
       const resposta = await limitarTempo(fetch(url));
 
       if (resposta.status === 429) {
         googleBooksBloqueadoAte = Date.now() + 5 * 60 * 1000;
-        console.warn('Google Books retornou 429. Tentando Open Library.');
       } else if (resposta.ok) {
         const dados = await resposta.json();
-        livros = (dados.items || []).map(normalizarResultadoGoogle).filter(l => l.titulo);
+        livros = (dados.items || [])
+          .map(normalizarResultadoGoogle)
+          .filter(l => l.titulo);
       }
     } catch (erro) {
       console.warn('Google Books indisponível:', erro);
     }
   }
 
-  // Segunda tentativa: Open Library.
-  if (livros.length < 10) {
-    const consultasOpenLibrary = [
-      consulta,
-      consultaBase,
-      genero === 'Qualquer' ? 'popular books' : genero
-    ];
+  if (livros.length < 20) {
+    const consultas = {
+      Romance: ['romance love story', 'romantic fiction'],
+      Drama: ['drama fiction', 'family drama novel'],
+      Ficção: ['fiction novel'],
+      Suspense: ['mystery thriller', 'detective novel'],
+      Fantasia: ['fantasy novel'],
+      'Young Adult': ['young adult romance fiction'],
+      'Não ficção': ['nonfiction books'],
+      Qualquer: ['popular fiction books']
+    };
 
-    for (const termo of [...new Set(consultasOpenLibrary)]) {
+    for (const termo of (consultas[genero] || consultas.Qualquer)) {
       try {
-        const url = `https://openlibrary.org/search.json?q=${encodeURIComponent(termo)}&limit=30`;
+        const url = `https://openlibrary.org/search.json?q=${encodeURIComponent(termo)}&limit=40`;
         const resposta = await limitarTempo(fetch(url));
         if (!resposta.ok) continue;
 
@@ -1058,12 +1271,14 @@ async function buscarRecomendacoesExternas(genero, livrosUsuario = biblioteca) {
             id: `openlibrary-${item.key || item.title}`,
             titulo: item.title || '',
             autor: item.author_name?.join(', ') || 'Autor desconhecido',
-            paginas: Number(item.number_of_pages_median) > 0 ? Number(item.number_of_pages_median) : null,
-            genero: assuntos[0] || genero,
+            paginas: Number(item.number_of_pages_median) > 0
+              ? Number(item.number_of_pages_median)
+              : null,
+            genero: detectarGenero(assuntos),
             capa: item.cover_i
               ? `https://covers.openlibrary.org/b/id/${item.cover_i}-M.jpg`
               : CAPA_PADRAO,
-            descricao: assuntos.slice(0, 8).join(', '),
+            descricao: '',
             tags: assuntos.map(normalizar),
             novidade: true
           };
@@ -1071,14 +1286,15 @@ async function buscarRecomendacoesExternas(genero, livrosUsuario = biblioteca) {
 
         livros = [...livros, ...complementares];
 
-        if (livros.length >= 15) break;
+        if (livros.length >= 50) break;
       } catch (erro) {
-        console.warn('Open Library indisponível para esta consulta:', erro);
+        console.warn('Open Library indisponível:', erro);
       }
     }
   }
 
   const vistos = new Set();
+
   const resultado = livros.filter(livro => {
     const titulo = normalizar(livro.titulo);
     if (!titulo || vistos.has(titulo)) return false;
@@ -1092,54 +1308,207 @@ async function buscarRecomendacoesExternas(genero, livrosUsuario = biblioteca) {
 }
 
 /* ==========================================================
-   SUGESTÕES DE RESERVA — NÃO DEPENDEM DA INTERNET
+   LIVROS DE RESERVA
+   Usados quando as APIs não fornecem opções adequadas.
+   As páginas são aproximadas e podem variar por edição.
    ========================================================== */
 
 const LIVROS_RESERVA = {
   Romance: [
-    { titulo: 'Amores Verdadeiros', autor: 'Taylor Jenkins Reid', genero: 'Romance' },
-    { titulo: 'Depois Daquele Verão', autor: 'Carley Fortune', genero: 'Romance' },
-    { titulo: 'Um Dia', autor: 'David Nicholls', genero: 'Romance' },
-    { titulo: 'Pessoas Normais', autor: 'Sally Rooney', genero: 'Romance' },
-    { titulo: 'A Hipótese do Amor', autor: 'Ali Hazelwood', genero: 'Romance' }
+    {
+      titulo: 'A Probabilidade Estatística do Amor à Primeira Vista',
+      autor: 'Jennifer E. Smith',
+      genero: 'Romance',
+      paginas: 224,
+      vibe: ['romance', 'leve'],
+      descricao: 'Uma história de amor que começa quando dois jovens se conhecem durante uma viagem e desenvolvem uma conexão inesperada.',
+      tags: ['romance', 'love story', 'first love', 'viagem', 'relacionamento']
+    },
+    {
+      titulo: 'Pessoas Normais',
+      autor: 'Sally Rooney',
+      genero: 'Romance',
+      paginas: 273,
+      vibe: ['romance', 'emocionante', 'pensar'],
+      descricao: 'A relação complexa entre Marianne e Connell acompanha os dois ao longo dos anos, explorando amor, intimidade e dificuldades de comunicação.',
+      tags: ['romance', 'relacionamento amoroso', 'love story', 'drama', 'introspectivo']
+    },
+    {
+      titulo: 'A Cinco Passos de Você',
+      autor: 'Rachael Lippincott',
+      genero: 'Romance',
+      paginas: 288,
+      vibe: ['romance', 'emocionante'],
+      descricao: 'Dois jovens se apaixonam enquanto enfrentam limitações que tornam a proximidade entre eles difícil e arriscada.',
+      tags: ['romance', 'love story', 'first love', 'drama', 'relacionamento']
+    },
+    {
+      titulo: 'Amores Verdadeiros',
+      autor: 'Taylor Jenkins Reid',
+      genero: 'Romance',
+      paginas: 352,
+      vibe: ['romance', 'emocionante'],
+      descricao: 'Uma mulher precisa compreender seus sentimentos quando alguém de seu passado retorna e coloca em questão a vida amorosa que construiu.',
+      tags: ['romance', 'love story', 'relacionamentos', 'drama']
+    },
+    {
+      titulo: 'Depois Daquele Verão',
+      autor: 'Carley Fortune',
+      genero: 'Romance',
+      paginas: 368,
+      vibe: ['romance', 'emocionante'],
+      descricao: 'Uma mulher retorna a um lugar cheio de lembranças e reencontra alguém com quem tem uma história afetiva complicada.',
+      tags: ['romance', 'second chance romance', 'love story', 'reencontro']
+    }
   ],
   Drama: [
-    { titulo: 'Os Sete Maridos de Evelyn Hugo', autor: 'Taylor Jenkins Reid', genero: 'Drama' },
-    { titulo: 'Malibu Renasce', autor: 'Taylor Jenkins Reid', genero: 'Drama' },
-    { titulo: 'Daisy Jones and The Six', autor: 'Taylor Jenkins Reid', genero: 'Drama' },
-    { titulo: 'Pequenos Incêndios por Toda Parte', autor: 'Celeste Ng', genero: 'Drama' }
+    {
+      titulo: 'Pessoas Normais',
+      autor: 'Sally Rooney',
+      genero: 'Drama',
+      paginas: 273,
+      vibe: ['romance', 'emocionante', 'pensar'],
+      descricao: 'A relação complexa entre Marianne e Connell explora amor, intimidade e as mudanças que acontecem ao longo dos anos.',
+      tags: ['romance', 'drama', 'relacionamento amoroso']
+    },
+    {
+      titulo: 'Os Sete Maridos de Evelyn Hugo',
+      autor: 'Taylor Jenkins Reid',
+      genero: 'Drama',
+      paginas: 360,
+      vibe: ['emocionante', 'pensar'],
+      descricao: 'Uma estrela de cinema revela os acontecimentos, relacionamentos e segredos que marcaram sua vida.',
+      tags: ['drama', 'relacionamentos', 'segredos', 'ficção literária']
+    },
+    {
+      titulo: 'Malibu Renasce',
+      autor: 'Taylor Jenkins Reid',
+      genero: 'Drama',
+      paginas: 368,
+      vibe: ['emocionante', 'pensar'],
+      descricao: 'Uma família enfrenta conflitos e segredos durante um dia decisivo, explorando relações familiares e consequências do passado.',
+      tags: ['drama', 'família', 'relacionamentos']
+    }
   ],
   Ficção: [
-    { titulo: 'A Biblioteca da Meia-Noite', autor: 'Matt Haig', genero: 'Ficção' },
-    { titulo: 'O Conto da Aia', autor: 'Margaret Atwood', genero: 'Ficção' },
-    { titulo: 'A Vida Invisível de Addie LaRue', autor: 'V. E. Schwab', genero: 'Ficção' }
+    {
+      titulo: 'A Biblioteca da Meia-Noite',
+      autor: 'Matt Haig',
+      genero: 'Ficção',
+      paginas: 308,
+      vibe: ['pensar', 'emocionante'],
+      descricao: 'Uma mulher explora versões alternativas de sua vida e reflete sobre escolhas, arrependimentos e possibilidades.',
+      tags: ['ficção', 'reflexivo', 'existencial']
+    },
+    {
+      titulo: 'O Conto da Aia',
+      autor: 'Margaret Atwood',
+      genero: 'Ficção',
+      paginas: 311,
+      vibe: ['pensar', 'presa'],
+      descricao: 'Em uma sociedade autoritária, uma mulher narra sua experiência de controle, opressão e resistência.',
+      tags: ['ficção', 'distopia', 'reflexivo']
+    }
   ],
   Suspense: [
-    { titulo: 'Verity', autor: 'Colleen Hoover', genero: 'Suspense' },
-    { titulo: 'A Paciente Silenciosa', autor: 'Alex Michaelides', genero: 'Suspense' },
-    { titulo: 'Garota Exemplar', autor: 'Gillian Flynn', genero: 'Suspense' },
-    { titulo: 'A Empregada', autor: 'Freida McFadden', genero: 'Suspense' }
+    {
+      titulo: 'A Paciente Silenciosa',
+      autor: 'Alex Michaelides',
+      genero: 'Suspense',
+      paginas: 350,
+      vibe: ['presa', 'pensar'],
+      descricao: 'Um psicoterapeuta tenta descobrir por que uma pintora parou de falar depois de um acontecimento violento.',
+      tags: ['suspense', 'mistério', 'thriller', 'plot twist']
+    },
+    {
+      titulo: 'Garota Exemplar',
+      autor: 'Gillian Flynn',
+      genero: 'Suspense',
+      paginas: 432,
+      vibe: ['presa', 'pensar'],
+      descricao: 'O desaparecimento de uma mulher expõe segredos e versões conflitantes dentro de um casamento.',
+      tags: ['suspense', 'mistério', 'thriller', 'relacionamento']
+    }
   ],
   Fantasia: [
-    { titulo: 'Harry Potter e a Pedra Filosofal', autor: 'J. K. Rowling', genero: 'Fantasia' },
-    { titulo: 'O Nome do Vento', autor: 'Patrick Rothfuss', genero: 'Fantasia' },
-    { titulo: 'A Vida Invisível de Addie LaRue', autor: 'V. E. Schwab', genero: 'Fantasia' }
+    {
+      titulo: 'Harry Potter e a Pedra Filosofal',
+      autor: 'J. K. Rowling',
+      genero: 'Fantasia',
+      paginas: 264,
+      vibe: ['leve', 'presa'],
+      descricao: 'Um menino descobre que pertence ao mundo da magia e começa uma nova vida em uma escola extraordinária.',
+      tags: ['fantasia', 'magia', 'aventura']
+    },
+    {
+      titulo: 'A Vida Invisível de Addie LaRue',
+      autor: 'V. E. Schwab',
+      genero: 'Fantasia',
+      paginas: 448,
+      vibe: ['romance', 'pensar'],
+      descricao: 'Uma mulher que não pode ser lembrada por ninguém atravessa séculos em busca de liberdade, conexão e amor.',
+      tags: ['fantasia', 'romance', 'love story', 'existencial']
+    }
   ],
   'Young Adult': [
-    { titulo: 'Jogos Vorazes', autor: 'Suzanne Collins', genero: 'Young Adult' },
-    { titulo: 'Extraordinário', autor: 'R. J. Palacio', genero: 'Young Adult' },
-    { titulo: 'É Assim que Acaba', autor: 'Colleen Hoover', genero: 'Young Adult' }
+    {
+      titulo: 'Jogos Vorazes',
+      autor: 'Suzanne Collins',
+      genero: 'Young Adult',
+      paginas: 374,
+      vibe: ['presa', 'emocionante'],
+      descricao: 'Uma jovem participa de uma competição mortal em uma sociedade desigual e precisa lutar para sobreviver.',
+      tags: ['young adult', 'distopia', 'aventura', 'suspense']
+    },
+    {
+      titulo: 'Extraordinário',
+      autor: 'R. J. Palacio',
+      genero: 'Young Adult',
+      paginas: 320,
+      vibe: ['emocionante', 'pensar'],
+      descricao: 'Um menino começa a frequentar uma escola regular e enfrenta desafios relacionados à amizade, empatia e aceitação.',
+      tags: ['young adult', 'família', 'amizade', 'emocionante']
+    }
   ],
   'Não ficção': [
-    { titulo: 'Hábitos Atômicos', autor: 'James Clear', genero: 'Não ficção' },
-    { titulo: 'O Poder do Hábito', autor: 'Charles Duhigg', genero: 'Não ficção' },
-    { titulo: 'Essencialismo', autor: 'Greg McKeown', genero: 'Não ficção' }
+    {
+      titulo: 'Hábitos Atômicos',
+      autor: 'James Clear',
+      genero: 'Não ficção',
+      paginas: 320,
+      vibe: ['pensar', 'leve'],
+      descricao: 'Um guia prático sobre como pequenas mudanças de comportamento podem ajudar a construir hábitos consistentes.',
+      tags: ['não ficção', 'desenvolvimento pessoal', 'hábitos']
+    },
+    {
+      titulo: 'Essencialismo',
+      autor: 'Greg McKeown',
+      genero: 'Não ficção',
+      paginas: 272,
+      vibe: ['pensar'],
+      descricao: 'O livro apresenta maneiras de priorizar o que é importante e reduzir compromissos que não contribuem para seus objetivos.',
+      tags: ['não ficção', 'produtividade', 'reflexivo']
+    }
   ],
   Qualquer: [
-    { titulo: 'Os Sete Maridos de Evelyn Hugo', autor: 'Taylor Jenkins Reid', genero: 'Drama' },
-    { titulo: 'A Biblioteca da Meia-Noite', autor: 'Matt Haig', genero: 'Ficção' },
-    { titulo: 'A Paciente Silenciosa', autor: 'Alex Michaelides', genero: 'Suspense' },
-    { titulo: 'Amores Verdadeiros', autor: 'Taylor Jenkins Reid', genero: 'Romance' }
+    {
+      titulo: 'A Probabilidade Estatística do Amor à Primeira Vista',
+      autor: 'Jennifer E. Smith',
+      genero: 'Romance',
+      paginas: 224,
+      vibe: ['romance', 'leve'],
+      descricao: 'Uma história de amor que começa quando dois jovens se conhecem durante uma viagem e desenvolvem uma conexão inesperada.',
+      tags: ['romance', 'love story', 'first love']
+    },
+    {
+      titulo: 'A Biblioteca da Meia-Noite',
+      autor: 'Matt Haig',
+      genero: 'Ficção',
+      paginas: 308,
+      vibe: ['pensar', 'emocionante'],
+      descricao: 'Uma mulher explora versões alternativas de sua vida e reflete sobre escolhas, arrependimentos e possibilidades.',
+      tags: ['ficção', 'reflexivo', 'existencial']
+    }
   ]
 };
 
@@ -1148,15 +1517,15 @@ function criarLivroReserva(item, indice) {
     id: `reserva-${normalizar(item.titulo).replace(/\s+/g, '-')}-${indice}`,
     titulo: item.titulo,
     autor: item.autor,
-    paginas: null,
+    paginas: item.paginas || null,
     paginaAtual: 0,
     genero: item.genero,
     capa: CAPA_PADRAO,
-    descricao: '',
+    descricao: item.descricao || '',
     status: 'quero_ler',
     favorito: false,
     nota: 0,
-    tags: [normalizar(item.genero)],
+    tags: [...(item.tags || [])],
     experiencia: { emocionei: 0, presa: 0, pensei: 0 },
     novidade: true,
     dataInicio: null,
@@ -1165,7 +1534,7 @@ function criarLivroReserva(item, indice) {
 }
 
 /* ==========================================================
-   FINALIZAR QUIZ — CORREÇÃO DO ERRO DE SUGESTÕES
+   FINALIZAR QUIZ
    ========================================================== */
 
 async function finalizarQuiz(genero) {
@@ -1177,7 +1546,7 @@ async function finalizarQuiz(genero) {
   container.innerHTML = `
     <div class="text-center py-10 space-y-3">
       <div class="w-6 h-6 border-2 border-blush-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-      <p class="text-xs text-cozy-muted">Buscando sugestões para você...</p>
+      <p class="text-xs text-cozy-muted">Procurando livros que realmente combinem com você...</p>
     </div>`;
 
   try {
@@ -1189,79 +1558,74 @@ async function finalizarQuiz(genero) {
       console.warn('Não foi possível buscar livros nas APIs:', erro);
     }
 
-    const novos = (externos || []).filter(livro =>
-      livro.titulo && !tituloJaExiste(livro.titulo)
-    );
+    /*
+      Primeiro filtra por compatibilidade real.
+      Não deixa o histórico de leitura compensar uma vibe errada.
+    */
+    const candidatos = [];
+    const titulosIncluidos = new Set();
 
-    const candidatos = novos.map(livro => {
-      const calculo = calcularMatch(livro, respostas, biblioteca);
+    for (const livro of externos || []) {
+      if (!livro.titulo) continue;
+      if (tituloJaExiste(livro.titulo)) continue;
+      if (!livroAtendeRespostas(livro, respostas)) continue;
 
-      return {
-        ...livro,
-        match: calculo.porcentagem ?? 50,
-        motivos: calculo.motivos || [],
-        novidade: true
-      };
-    });
+      const chave = normalizar(livro.titulo);
+      if (titulosIncluidos.has(chave)) continue;
 
-    // Se as APIs falharem ou retornarem poucos livros, completa com sugestões locais.
-    const reservas = LIVROS_RESERVA[genero] || LIVROS_RESERVA.Qualquer;
-
-    for (let i = 0; i < reservas.length && candidatos.length < 3; i++) {
-      const reserva = reservas[i];
-
-      if (tituloJaExiste(reserva.titulo)) continue;
-
-      if (candidatos.some(l =>
-        normalizar(l.titulo) === normalizar(reserva.titulo)
-      )) continue;
-
-      const livro = criarLivroReserva(reserva, i);
       const calculo = calcularMatch(livro, respostas, biblioteca);
 
       candidatos.push({
         ...livro,
-        match: calculo.porcentagem ?? 50,
-        motivos: calculo.motivos || ['Sugestão de reserva baseada no gênero escolhido.'],
+        match: calculo.porcentagem,
+        motivos: calculo.motivos,
         novidade: true
       });
+
+      titulosIncluidos.add(chave);
     }
 
-    // Se o usuário já tiver quase todos os títulos de reserva,
-    // mostra sugestões disponíveis mesmo que já estejam na estante.
-    if (candidatos.length === 0) {
-      for (let i = 0; i < reservas.length && candidatos.length < 3; i++) {
-        const reserva = reservas[i];
-        const livro = criarLivroReserva(reserva, i);
-        const calculo = calcularMatch(livro, respostas, biblioteca);
+    /*
+      Completa a lista com títulos locais que possuem descrição
+      e número de páginas conhecidos pelo catálogo de reserva.
+    */
+    const reservas = LIVROS_RESERVA[genero] || LIVROS_RESERVA.Qualquer;
 
-        candidatos.push({
-          ...livro,
-          match: calculo.porcentagem ?? 50,
-          motivos: ['Sugestão de reserva para o gênero selecionado.'],
-          novidade: !tituloJaExiste(livro.titulo),
-          jaNaEstante: tituloJaExiste(livro.titulo)
-        });
-      }
+    for (let i = 0; i < reservas.length && candidatos.length < 3; i++) {
+      const reserva = reservas[i];
+      const chave = normalizar(reserva.titulo);
+
+      if (tituloJaExiste(reserva.titulo)) continue;
+      if (titulosIncluidos.has(chave)) continue;
+
+      const livro = criarLivroReserva(reserva, i);
+
+      if (!livroAtendeRespostas(livro, respostas)) continue;
+
+      const calculo = calcularMatch(livro, respostas, biblioteca);
+
+      candidatos.push({
+        ...livro,
+        match: calculo.porcentagem,
+        motivos: calculo.motivos,
+        novidade: true
+      });
+
+      titulosIncluidos.add(chave);
     }
 
     candidatos.sort((a, b) => b.match - a.match);
+
+    if (!candidatos.length) {
+      exibirResultado([]);
+      return;
+    }
+
     exibirResultado(candidatos.slice(0, 3));
 
   } catch (erro) {
     console.error('Erro ao gerar recomendações:', erro);
-
-    // Última alternativa: o quiz ainda mostra sugestões sem consultar a internet.
-    const reservas = LIVROS_RESERVA[genero] || LIVROS_RESERVA.Qualquer;
-    const alternativas = reservas.slice(0, 3).map((item, i) => ({
-      ...criarLivroReserva(item, i),
-      match: 50,
-      motivos: ['Sugestão de reserva baseada no gênero escolhido.'],
-      novidade: !tituloJaExiste(item.titulo),
-      jaNaEstante: tituloJaExiste(item.titulo)
-    }));
-
-    exibirResultado(alternativas);
+    exibirResultado([]);
   }
 }
 
@@ -1315,7 +1679,12 @@ function exibirResultado(livros) {
   if (!recomendacoesQuizAtuais.length) {
     container.innerHTML = `
       <div class="text-center py-6 space-y-3">
-        <p class="text-xs text-cozy-muted">Não consegui montar as sugestões. Tente novamente.</p>
+        <p class="text-2xl">🔎</p>
+        <h3 class="font-serif font-bold text-sm">Não encontrei combinações confiáveis desta vez.</h3>
+        <p class="text-xs text-cozy-muted">
+          Preferi não recomendar livros sem informações suficientes sobre a vibe, o gênero ou o tamanho que você escolheu.
+          Tente outro gênero ou escolha um tamanho sem preferência.
+        </p>
         <button type="button" onclick="iniciarQuiz()"
           class="w-full bg-blush-500 text-white font-semibold py-2 rounded-lg text-xs">
           Tentar novamente
@@ -1331,9 +1700,9 @@ function exibirResultado(livros) {
   container.innerHTML = `
     <div class="text-center mb-3">
       <span class="text-[10px] font-bold text-blush-500 uppercase">ReadMatch</span>
-      <h3 class="font-serif text-base font-bold text-stone-800">Livros que combinam com você</h3>
+      <h3 class="font-serif text-base font-bold text-stone-800">Livros que combinam com sua escolha</h3>
       <p class="text-[11px] text-cozy-muted mt-1">
-        A pontuação usa suas respostas e os dados disponíveis sobre cada livro.
+        A compatibilidade considera a vibe, o gênero e o tamanho; seu histórico tem peso complementar.
       </p>
     </div>
 
@@ -1353,7 +1722,7 @@ function exibirResultado(livros) {
               </div>
               <p class="text-[11px] text-cozy-muted">${escaparHTML(livro.autor)}</p>
               <span class="text-[9px] text-amber-700 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded inline-block mt-1">
-                ${livro.jaNaEstante ? 'Já está na sua estante' : 'Sugestão de leitura'}
+                Sugestão de leitura
               </span>
               <p class="text-[10px] text-stone-500 mt-1">
                 ${livro.paginas ? `${livro.paginas} páginas` : 'Páginas não informadas'} • ${escaparHTML(livro.genero || 'Gênero não informado')}
@@ -1369,11 +1738,10 @@ function exibirResultado(livros) {
               </ul>
             </div>` : ''}
 
-          ${livro.novidade && !livro.jaNaEstante ? `
-            <button type="button" onclick="adicionarRecomendacaoPorIndice(${idx})"
-              class="w-full bg-blush-500 hover:bg-blush-600 text-white font-semibold py-1.5 rounded-lg text-[11px]">
-              + Adicionar à estante
-            </button>` : ''}
+          <button type="button" onclick="adicionarRecomendacaoPorIndice(${idx})"
+            class="w-full bg-blush-500 hover:bg-blush-600 text-white font-semibold py-1.5 rounded-lg text-[11px]">
+            + Adicionar à estante
+          </button>
         </div>`).join('')}
     </div>
 
