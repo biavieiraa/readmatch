@@ -1,4 +1,11 @@
+// ============================================================
+// READMATCH — JavaScript completo
+// Mantém os IDs e nomes de funções usados no código original.
+// Observação: localStorage é adequado para protótipo local, não
+// para autenticação segura ou armazenamento multiusuário real.
+// ============================================================
 
+// --- CONFIGURAÇÃO E DADOS ---
 const CAPA_PADRAO = 'https://placehold.co/150x225/fce7f3/c94672?text=Sem+Capa';
 const CHAVE_USUARIOS = 'readmatch_usuarios_cadastrados';
 const CHAVE_USUARIO_ATUAL = 'readmatch_usuario_atual';
@@ -11,17 +18,19 @@ let recomendacoesQuizAtuais = [];
 let etapaAtual = 1;
 let respostas = { vibe: '', tempo: '', genero: '' };
 
+// Evita repetir chamadas às APIs durante a mesma sessão.
+const cacheRecomendacoes = new Map();
+let googleBooksBloqueadoAte = 0;
+
 function getChaveStorage() {
-  return usuarioAtual
-    ? `readmatch_livros_${usuarioAtual.email}`
-    : 'readmatch_livros_visitante';
+  return usuarioAtual ? `readmatch_livros_${usuarioAtual.email}` : 'readmatch_livros_visitante';
 }
 
 function carregarBiblioteca() {
   try {
     return JSON.parse(localStorage.getItem(getChaveStorage())) || [];
   } catch (erro) {
-    console.error('Erro ao carregar biblioteca:', erro);
+    console.error('Não foi possível carregar a biblioteca:', erro);
     return [];
   }
 }
@@ -34,10 +43,13 @@ function salvarStorage() {
 }
 
 function escaparHTML(valor) {
-  return String(valor ?? '').replace(/[&<>"']/g, c => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;',
-    '"': '&quot;', "'": '&#39;'
-  })[c]);
+  return String(valor ?? '').replace(/[&<>"']/g, caractere => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[caractere]);
 }
 
 function normalizar(texto) {
@@ -49,15 +61,10 @@ function normalizar(texto) {
 }
 
 function tituloJaExiste(titulo) {
-  return biblioteca.some(
-    livro => normalizar(livro.titulo) === normalizar(titulo)
-  );
+  return biblioteca.some(livro => normalizar(livro.titulo) === normalizar(titulo));
 }
 
-// ============================================================
-// LOGIN
-// ============================================================
-
+// --- LOGIN, CADASTRO E RECUPERAÇÃO ---
 function abrirModalLogin() {
   document.getElementById('modal-login')?.classList.remove('hidden');
 }
@@ -71,10 +78,10 @@ function autenticarUsuario(e) {
 
   const email = document.getElementById('login-email')?.value.trim().toLowerCase();
   const senha = document.getElementById('login-senha')?.value.trim();
-  const nomeCampo = document.getElementById('login-nome')?.value.trim();
+  const campoNome = document.getElementById('login-nome')?.value.trim();
 
   if (!email || !senha) {
-    alert('Preencha o e-mail e a senha.');
+    alert('Por favor, preencha e-mail e senha.');
     return;
   }
 
@@ -84,23 +91,27 @@ function autenticarUsuario(e) {
   }
 
   const usuarios = JSON.parse(localStorage.getItem(CHAVE_USUARIOS)) || [];
-  const usuario = usuarios.find(u => u.email === email);
+  const user = usuarios.find(u => u.email === email);
 
-  if (!usuario) {
-    const nome = nomeCampo || email.split('@')[0];
-    usuarios.push({ nome, email, senha });
+  if (!user) {
+    const nome = campoNome || email.split('@')[0];
+    const novoUsuario = { nome, email, senha };
+
+    usuarios.push(novoUsuario);
     localStorage.setItem(CHAVE_USUARIOS, JSON.stringify(usuarios));
+
     usuarioAtual = { nome, email };
   } else {
-    if (usuario.senha !== senha) {
-      alert('Senha incorreta.');
+    if (user.senha !== senha) {
+      alert('Senha incorreta!');
       return;
     }
 
-    usuarioAtual = { nome: usuario.nome, email: usuario.email };
+    usuarioAtual = { nome: user.nome, email: user.email };
   }
 
   localStorage.setItem(CHAVE_USUARIO_ATUAL, JSON.stringify(usuarioAtual));
+
   biblioteca = carregarBiblioteca();
   atualizarHeaderUsuario();
   renderizarEstante();
@@ -108,96 +119,89 @@ function autenticarUsuario(e) {
 }
 
 function esqueciSenha() {
-  const emailInicial = document.getElementById('login-email')?.value.trim().toLowerCase();
-  const email = prompt('Digite o e-mail cadastrado:', emailInicial || '');
+  const emailInput = document.getElementById('login-email')?.value.trim().toLowerCase();
+  const email = prompt('Digite o e-mail cadastrado para redefinir a senha:', emailInput || '');
 
   if (!email) return;
 
   const usuarios = JSON.parse(localStorage.getItem(CHAVE_USUARIOS)) || [];
-  const indice = usuarios.findIndex(
-    u => u.email === email.trim().toLowerCase()
-  );
+  const index = usuarios.findIndex(u => u.email === email.trim().toLowerCase());
 
-  if (indice === -1) {
-    alert('Nenhum usuário encontrado com esse e-mail.');
+  if (index === -1) {
+    alert('Nenhum usuário cadastrado com este e-mail.');
     return;
   }
 
-  const novaSenha = prompt('Digite sua nova senha:');
+  // Protótipo local: em um produto real, a redefinição deve ocorrer por e-mail.
+  const novaSenha = prompt(`Usuário "${usuarios[index].nome}" encontrado!\nDigite sua nova senha:`);
+
   if (!novaSenha || !novaSenha.trim()) return;
 
-  usuarios[indice].senha = novaSenha.trim();
+  usuarios[index].senha = novaSenha.trim();
   localStorage.setItem(CHAVE_USUARIOS, JSON.stringify(usuarios));
-  alert('Senha alterada neste navegador.');
+
+  alert('Senha alterada neste navegador. Agora você já pode entrar com a nova senha.');
 }
 
 function fazerLogout() {
   localStorage.removeItem(CHAVE_USUARIO_ATUAL);
   usuarioAtual = null;
   biblioteca = carregarBiblioteca();
+
   atualizarHeaderUsuario();
   renderizarEstante();
   abrirModalLogin();
 }
 
 function atualizarHeaderUsuario() {
-  const elemento = document.getElementById('info-usuario-header');
-  if (!elemento) return;
+  const elUser = document.getElementById('info-usuario-header');
+
+  if (!elUser) return;
 
   if (usuarioAtual) {
-    elemento.innerHTML = `
+    elUser.innerHTML = `
       <div class="flex items-center gap-2 bg-stone-100 px-3 py-1.5 rounded-xl">
-        <span class="text-xs font-semibold text-stone-700">
-          Olá, <b>${escaparHTML(usuarioAtual.nome)}</b>
-        </span>
-        <button type="button" onclick="fazerLogout()"
-          class="text-[10px] text-red-500 font-bold hover:underline cursor-pointer">
-          Sair
-        </button>
+        <span class="text-xs font-semibold text-stone-700">Olá, <b>${escaparHTML(usuarioAtual.nome)}</b></span>
+        <button type="button" onclick="fazerLogout()" class="text-[10px] text-red-500 font-bold hover:underline cursor-pointer">Sair</button>
       </div>`;
   } else {
-    elemento.innerHTML = `
-      <button type="button" onclick="abrirModalLogin()"
-        class="bg-blush-500 hover:bg-blush-600 text-white font-semibold text-xs px-3.5 py-2 rounded-xl transition cursor-pointer shadow-sm">
-        Entrar / Cadastrar
-      </button>`;
+    elUser.innerHTML = `
+      <button type="button" onclick="abrirModalLogin()" class="bg-blush-500 hover:bg-blush-600 text-white font-semibold text-xs px-3.5 py-2 rounded-xl transition cursor-pointer shadow-sm">Entrar / Cadastrar</button>`;
   }
 }
 
-// ============================================================
-// META DE LEITURA
-// ============================================================
-
+// --- META DE LEITURA ---
 function atualizarMeta() {
   const lidos = biblioteca.filter(l => l.status === 'lido').length;
   const porcentagem = metaLeitura > 0
     ? Math.min(Math.round((lidos / metaLeitura) * 100), 100)
     : 0;
 
-  const progresso = document.getElementById('meta-progresso');
-  const percentual = document.getElementById('meta-porcentagem');
-  const barra = document.getElementById('meta-barra');
-  const mensagem = document.getElementById('meta-mensagem');
+  const elProgresso = document.getElementById('meta-progresso');
+  const elPorcentagem = document.getElementById('meta-porcentagem');
+  const elBarra = document.getElementById('meta-barra');
+  const elMensagem = document.getElementById('meta-mensagem');
 
-  if (progresso) progresso.innerText = `${lidos} de ${metaLeitura} livros`;
-  if (percentual) percentual.innerText = `${porcentagem}% concluído`;
-  if (barra) barra.style.width = `${porcentagem}%`;
+  if (elProgresso) elProgresso.innerText = `${lidos} de ${metaLeitura} livros`;
+  if (elPorcentagem) elPorcentagem.innerText = `${porcentagem}% concluído`;
+  if (elBarra) elBarra.style.width = `${porcentagem}%`;
 
-  if (mensagem) {
-    mensagem.innerText = lidos >= metaLeitura
+  if (elMensagem) {
+    elMensagem.innerText = lidos >= metaLeitura
       ? 'Parabéns! Você alcançou sua meta do ano.'
-      : `Faltam ${metaLeitura - lidos} livro(s) para atingir sua meta.`;
+      : `Faltam ${metaLeitura - lidos} livro${metaLeitura - lidos === 1 ? '' : 's'} para atingir seu objetivo.`;
   }
 }
 
 function alterarMeta() {
-  const valor = prompt('Qual é sua nova meta anual?', metaLeitura);
-  if (valor === null || valor.trim() === '') return;
+  const novaMeta = prompt('Qual é a sua nova meta de leitura para este ano?', metaLeitura);
 
-  const numero = Number(valor);
+  if (novaMeta === null || novaMeta.trim() === '') return;
 
-  if (Number.isFinite(numero) && numero > 0) {
-    metaLeitura = Math.floor(numero);
+  const valor = Number(novaMeta);
+
+  if (Number.isFinite(valor) && valor > 0) {
+    metaLeitura = Math.floor(valor);
     localStorage.setItem(CHAVE_META, String(metaLeitura));
     atualizarMeta();
   } else {
@@ -205,23 +209,18 @@ function alterarMeta() {
   }
 }
 
-// ============================================================
-// ESTANTE
-// ============================================================
-
+// --- ESTANTE E FILTROS ---
 function filtrarEstante(status) {
   filtroAtual = status;
 
   document.querySelectorAll('.btn-filtro').forEach(btn => {
-    btn.className =
-      'btn-filtro px-3 py-1 rounded-lg transition cursor-pointer text-stone-600 hover:bg-stone-100';
+    btn.className = 'btn-filtro px-3 py-1 rounded-lg transition cursor-pointer text-stone-600 hover:bg-stone-100';
   });
 
-  const ativo = document.getElementById(`btn-filtro-${status}`);
+  const btnAtivo = document.getElementById(`btn-filtro-${status}`);
 
-  if (ativo) {
-    ativo.className =
-      'btn-filtro px-3 py-1 rounded-lg transition cursor-pointer bg-blush-500 text-white font-semibold';
+  if (btnAtivo) {
+    btnAtivo.className = 'btn-filtro px-3 py-1 rounded-lg transition cursor-pointer bg-blush-500 text-white font-semibold';
   }
 
   renderizarEstante();
@@ -234,98 +233,62 @@ function renderizarEstante() {
   if (!container) return;
 
   if (contador) contador.innerText = biblioteca.length;
+
   atualizarMeta();
 
-  let livros = biblioteca;
+  let livrosExibidos = biblioteca;
 
   if (filtroAtual === 'favoritos') {
-    livros = biblioteca.filter(l => l.favorito);
+    livrosExibidos = biblioteca.filter(l => l.favorito);
   } else if (filtroAtual !== 'todos') {
-    livros = biblioteca.filter(l => l.status === filtroAtual);
+    livrosExibidos = biblioteca.filter(l => l.status === filtroAtual);
   }
 
-  if (!livros.length) {
+  if (livrosExibidos.length === 0) {
     container.innerHTML = `
       <div class="col-span-full py-12 text-center space-y-2">
         <span class="text-3xl">📚</span>
-        <p class="text-xs text-cozy-muted font-medium">
-          Sua estante está vazia nesta categoria.
-        </p>
-        <button type="button" onclick="abrirModalCadastro()"
-          class="text-xs text-blush-600 font-bold hover:underline cursor-pointer">
-          Adicionar o primeiro livro
-        </button>
+        <p class="text-xs text-cozy-muted font-medium">Sua estante está vazia nesta categoria.</p>
+        <button type="button" onclick="abrirModalCadastro()" class="text-xs text-blush-600 font-bold hover:underline cursor-pointer">Adicionar o primeiro livro</button>
       </div>`;
     return;
   }
 
-  const statusHTML = {
-    quero_ler: '<span class="bg-purple-50 text-purple-700 text-[10px] px-2 py-0.5 rounded-full">Quero Ler</span>',
-    lendo: '<span class="bg-pink-50 text-blush-600 text-[10px] px-2 py-0.5 rounded-full">Lendo</span>',
-    lido: '<span class="bg-emerald-50 text-emerald-700 text-[10px] px-2 py-0.5 rounded-full">Lido</span>',
-    abandonado: '<span class="bg-stone-100 text-stone-500 text-[10px] px-2 py-0.5 rounded-full">Abandonado</span>'
+  const badgeStatus = {
+    quero_ler: '<span class="bg-purple-50 text-purple-700 border border-purple-100 text-[10px] font-bold px-2 py-0.5 rounded-full">Quero Ler</span>',
+    lendo: '<span class="bg-pink-50 text-blush-600 border border-blush-100 text-[10px] font-bold px-2 py-0.5 rounded-full">Lendo</span>',
+    lido: '<span class="bg-emerald-50 text-emerald-700 border border-emerald-100 text-[10px] font-bold px-2 py-0.5 rounded-full">Lido</span>',
+    abandonado: '<span class="bg-stone-100 text-stone-500 text-[10px] font-bold px-2 py-0.5 rounded-full">Abandonado</span>'
   };
 
-  container.innerHTML = livros.map(livro => {
-    const atual = Number(livro.paginaAtual) || 0;
-    const total = Math.max(1, Number(livro.paginas) || 1);
-    const percentual = Math.min(100, Math.round(atual / total * 100));
-    const id = escaparHTML(livro.id);
+  container.innerHTML = livrosExibidos.map(livro => {
+    const pagAtual = Number(livro.paginaAtual) || 0;
+    const totalPag = Math.max(1, Number(livro.paginas) || 1);
+    const porcentagem = Math.min(100, Math.round((pagAtual / totalPag) * 100));
+    const idSeguro = escaparHTML(livro.id);
 
     return `
-      <div onclick="abrirDetalhes('${id}')"
-        class="bg-white p-2.5 rounded-xl border border-blush-100 shadow-sm hover:shadow transition relative group cursor-pointer flex flex-col justify-between">
-        <button type="button" onclick="deletarLivro(event, '${id}')"
-          title="Excluir"
-          class="absolute top-2 right-2 bg-stone-900/70 hover:bg-red-500 text-white w-5 h-5 rounded-full text-xs opacity-0 group-hover:opacity-100 transition z-10">
-          ✕
-        </button>
-
+      <div onclick="abrirDetalhes('${idSeguro}')" class="bg-white p-2.5 rounded-xl border border-blush-100 shadow-sm hover:shadow transition relative group cursor-pointer flex flex-col justify-between">
+        <button type="button" onclick="deletarLivro(event, '${idSeguro}')" title="Excluir" class="absolute top-2 right-2 bg-stone-900/70 hover:bg-red-500 text-white w-5 h-5 rounded-full text-xs opacity-0 group-hover:opacity-100 transition z-10 flex items-center justify-center">✕</button>
         <div>
           <div class="aspect-[2/3] w-full bg-stone-100 rounded-lg overflow-hidden mb-2.5 relative">
-            <img src="${escaparHTML(livro.capa || CAPA_PADRAO)}"
-              alt="${escaparHTML(livro.titulo)}"
-              class="w-full h-full object-cover"
-              onerror="this.onerror=null;this.src='${CAPA_PADRAO}';">
-            ${livro.favorito
-              ? '<span class="absolute bottom-1.5 left-1.5 text-[10px] bg-white text-blush-600 px-1.5 py-0.5 rounded">Favorito ♥</span>'
-              : ''}
+            <img src="${escaparHTML(livro.capa || CAPA_PADRAO)}" alt="${escaparHTML(livro.titulo)}" class="w-full h-full object-cover" onerror="this.onerror=null; this.src='${CAPA_PADRAO}';">
+            ${livro.favorito ? '<span class="absolute bottom-1.5 left-1.5 text-[10px] font-bold bg-white/90 text-blush-600 px-1.5 py-0.5 rounded border border-blush-100 shadow-sm">Favorito</span>' : ''}
           </div>
-
-          <div class="mb-1 flex items-center justify-between">
-            ${statusHTML[livro.status] || ''}
-            ${Number(livro.nota) > 0
-              ? `<span class="text-[11px] font-bold text-amber-600">${livro.nota}/5</span>`
-              : ''}
-          </div>
-
-          <h4 class="font-serif font-bold text-xs text-stone-800 line-clamp-1">
-            ${escaparHTML(livro.titulo)}
-          </h4>
-          <p class="text-[11px] text-cozy-muted truncate">
-            ${escaparHTML(livro.autor)}
-          </p>
-
+          <div class="mb-1 flex items-center justify-between">${badgeStatus[livro.status] || ''}${Number(livro.nota) > 0 ? `<span class="text-[11px] font-bold text-amber-600">${Number(livro.nota)}/5</span>` : ''}</div>
+          <h4 class="font-serif font-bold text-xs text-stone-800 line-clamp-1 mt-1">${escaparHTML(livro.titulo)}</h4>
+          <p class="text-[11px] text-cozy-muted truncate">${escaparHTML(livro.autor)}</p>
           ${livro.status === 'lendo' ? `
             <div class="mt-2.5 pt-2 border-t border-stone-100 space-y-1">
-              <div class="flex justify-between text-[10px] text-cozy-muted">
-                <span>Pág. ${atual} / ${total}</span>
-                <span class="font-bold text-blush-600">${percentual}%</span>
-              </div>
-              <div class="w-full bg-stone-100 h-1.5 rounded-full overflow-hidden">
-                <div class="bg-blush-500 h-full rounded-full"
-                  style="width:${percentual}%"></div>
-              </div>
+              <div class="flex justify-between text-[10px] font-medium text-cozy-muted"><span>Pág. ${pagAtual} / ${totalPag}</span><span class="font-bold text-blush-600">${porcentagem}%</span></div>
+              <div class="w-full bg-stone-100 h-1.5 rounded-full overflow-hidden"><div class="bg-blush-500 h-full rounded-full transition-all" style="width:${porcentagem}%"></div></div>
             </div>` : ''}
         </div>
       </div>`;
   }).join('');
 }
 
-// ============================================================
-// BUSCA E CADASTRO DE LIVROS
-// ============================================================
-
+// --- BUSCA E CADASTRO DE LIVROS ---
 function abrirModalCadastro() {
   document.getElementById('modal-cadastro')?.classList.remove('hidden');
 }
@@ -335,8 +298,7 @@ function fecharModalCadastro() {
 
   const container = document.getElementById('container-resultados');
   if (container) {
-    container.innerHTML =
-      '<p class="text-xs text-cozy-muted text-center py-8">Digite o nome de um livro para pesquisar.</p>';
+    container.innerHTML = '<p class="text-xs text-cozy-muted text-center py-8">Digite o nome de um livro acima para pesquisar.</p>';
   }
 
   const input = document.getElementById('input-busca-api');
@@ -345,20 +307,23 @@ function fecharModalCadastro() {
 
 function normalizarLivroAPI(item) {
   const info = item.volumeInfo || {};
+
   let capa = info.imageLinks?.thumbnail || info.imageLinks?.smallThumbnail || CAPA_PADRAO;
 
-  if (capa.startsWith('http:')) capa = capa.replace('http:', 'https:');
-
-  const categorias = Array.isArray(info.categories) ? info.categories : [];
+  if (capa.startsWith('http:')) {
+    capa = capa.replace('http:', 'https:');
+  }
 
   return {
     titulo: info.title || 'Sem título',
-    autor: info.authors?.join(', ') || 'Autor desconhecido',
+    autor: Array.isArray(info.authors) ? info.authors.join(', ') : 'Autor desconhecido',
     paginas: Number(info.pageCount) > 0 ? Number(info.pageCount) : null,
-    genero: categorias[0]?.split('/')[0]?.trim() || '',
+    genero: Array.isArray(info.categories) && info.categories.length
+      ? info.categories[0].split('/')[0].trim()
+      : '',
     capa,
     descricao: info.description || '',
-    tags: categorias.flatMap(c => c.split(/[\/,]/)).map(normalizar)
+    tags: []
   };
 }
 
@@ -366,33 +331,34 @@ async function buscarLivrosAPI(e) {
   if (e) e.preventDefault();
 
   const input = document.getElementById('input-busca-api');
-  const query = input?.value.trim() || '';
+  const query = input ? input.value.trim() : '';
   const container = document.getElementById('container-resultados');
-  const botao = document.getElementById('btn-buscar-api');
+  const btn = document.getElementById('btn-buscar-api');
 
   if (!query) {
-    alert('Digite o nome de um livro ou autor.');
-    return;
+    return alert('Digite o nome de um livro ou autor para buscar.');
   }
 
-  if (botao) {
-    botao.innerText = 'Buscando...';
-    botao.disabled = true;
+  if (btn) {
+    btn.innerText = 'Buscando...';
+    btn.disabled = true;
   }
 
   if (container) {
-    container.innerHTML =
-      '<p class="text-xs text-cozy-muted text-center py-8">Pesquisando...</p>';
+    container.innerHTML = '<p class="text-xs text-cozy-muted text-center py-8 animate-pulse">Pesquisando nas bibliotecas...</p>';
   }
 
   resultadosBuscaAPI = [];
 
   try {
-    const resposta = await fetch(
-      `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=8`
-    );
+    // Limita a quantidade de resultados para reduzir o uso da API.
+    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=8`;
+    const resposta = await fetch(url);
 
-    if (resposta.ok) {
+    if (resposta.status === 429) {
+      console.warn('Google Books limitou as chamadas. Tentando Open Library.');
+      googleBooksBloqueadoAte = Date.now() + 5 * 60 * 1000;
+    } else if (resposta.ok) {
       const dados = await resposta.json();
       resultadosBuscaAPI = (dados.items || []).map(normalizarLivroAPI);
     }
@@ -400,11 +366,11 @@ async function buscarLivrosAPI(e) {
     console.warn('Google Books indisponível:', erro);
   }
 
-  if (!resultadosBuscaAPI.length) {
+  // Se o Google Books falhar ou não encontrar resultados, usa a Open Library.
+  if (resultadosBuscaAPI.length === 0) {
     try {
-      const resposta = await fetch(
-        `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&limit=8`
-      );
+      const url = `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&limit=8`;
+      const resposta = await fetch(url);
 
       if (resposta.ok) {
         const dados = await resposta.json();
@@ -412,61 +378,56 @@ async function buscarLivrosAPI(e) {
         resultadosBuscaAPI = (dados.docs || []).map(doc => ({
           titulo: doc.title || 'Sem título',
           autor: doc.author_name?.join(', ') || 'Autor desconhecido',
-          paginas: Number(doc.number_of_pages_median) || null,
+          paginas: Number(doc.number_of_pages_median) > 0
+            ? Number(doc.number_of_pages_median)
+            : null,
           genero: doc.subject?.[0] || '',
           capa: doc.cover_i
             ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`
             : CAPA_PADRAO,
           descricao: '',
-          tags: (doc.subject || []).slice(0, 8).map(normalizar)
+          tags: Array.isArray(doc.subject)
+            ? doc.subject.slice(0, 8).map(normalizar)
+            : []
         }));
       }
     } catch (erro) {
-      console.error('Open Library indisponível:', erro);
+      console.error('Erro na Open Library:', erro);
     }
   }
 
   if (container) {
     if (!resultadosBuscaAPI.length) {
       container.innerHTML = `
-        <p class="text-xs text-stone-600 text-center py-8">
-          Nenhum livro encontrado. Tente outro termo.
-        </p>`;
+        <div class="text-center py-8 space-y-1">
+          <p class="text-xs text-stone-600 font-bold">Nenhum livro encontrado para "${escaparHTML(query)}".</p>
+          <p class="text-[11px] text-stone-400">Tente buscar apenas o nome principal do livro ou autor.</p>
+        </div>`;
     } else {
-      container.innerHTML = resultadosBuscaAPI.map((livro, index) => `
-        <div class="flex items-center gap-3 p-2 bg-stone-50 rounded-xl border border-stone-200">
-          <img src="${escaparHTML(livro.capa)}"
-            class="w-10 h-14 object-cover rounded"
-            onerror="this.onerror=null;this.src='${CAPA_PADRAO}';">
-
+      container.innerHTML = resultadosBuscaAPI.map((item, index) => `
+        <div class="flex items-center gap-3 p-2 bg-stone-50 hover:bg-blush-50/50 rounded-xl border border-stone-200 transition">
+          <img src="${escaparHTML(item.capa)}" class="w-10 h-14 object-cover rounded shadow-sm flex-shrink-0" onerror="this.onerror=null; this.src='${CAPA_PADRAO}';">
           <div class="flex-1 min-w-0">
-            <h5 class="font-serif font-bold text-xs truncate">
-              ${escaparHTML(livro.titulo)}
-            </h5>
-            <p class="text-[11px] text-cozy-muted truncate">
-              ${escaparHTML(livro.autor)}
-            </p>
-            <span class="text-[10px] text-stone-600">
-              ${livro.paginas || '?'} páginas · ${escaparHTML(livro.genero || 'Gênero não informado')}
+            <h5 class="font-serif font-bold text-xs text-stone-800 truncate">${escaparHTML(item.titulo)}</h5>
+            <p class="text-[11px] text-cozy-muted truncate">${escaparHTML(item.autor)}</p>
+            <span class="text-[10px] bg-white px-2 py-0.5 rounded border border-stone-200 text-stone-600 mt-1 inline-block">
+              ${item.paginas ? `${item.paginas} págs` : 'Páginas não informadas'} • ${escaparHTML(item.genero || 'Gênero não informado')}
             </span>
           </div>
-
-          <button type="button" onclick="selecionarLivroAPI(${index})"
-            class="bg-blush-500 text-white text-xs px-3 py-1.5 rounded-lg">
-            Adicionar
-          </button>
+          <button type="button" onclick="selecionarLivroAPI(${index})" class="bg-blush-500 hover:bg-blush-600 text-white font-semibold text-xs px-3 py-1.5 rounded-lg transition cursor-pointer">Adicionar</button>
         </div>`).join('');
     }
   }
 
-  if (botao) {
-    botao.innerText = 'Buscar';
-    botao.disabled = false;
+  if (btn) {
+    btn.innerText = 'Buscar';
+    btn.disabled = false;
   }
 }
 
 function selecionarLivroAPI(index) {
   const dados = resultadosBuscaAPI[index];
+
   if (!dados) return;
 
   if (tituloJaExiste(dados.titulo)) {
@@ -474,73 +435,77 @@ function selecionarLivroAPI(index) {
     return;
   }
 
-  biblioteca.unshift({
+  const novoLivro = {
     id: (Date.now() + Math.random()).toString(),
     ...dados,
+    paginas: Number(dados.paginas) > 0 ? Number(dados.paginas) : null,
     paginaAtual: 0,
     status: 'quero_ler',
     favorito: false,
     nota: 0,
+    tags: Array.isArray(dados.tags) ? dados.tags : [],
     experiencia: { emocionei: 0, presa: 0, pensei: 0 },
     dataInicio: null,
     dataFim: null
-  });
+  };
 
+  biblioteca.unshift(novoLivro);
   salvarStorage();
   renderizarEstante();
   fecharModalCadastro();
 }
 
-// ============================================================
-// DETALHES, PROGRESSO E AVALIAÇÃO
-// ============================================================
-
+// --- DETALHES, PROGRESSO E AVALIAÇÃO ---
 function abrirDetalhes(id) {
   const livro = biblioteca.find(l => String(l.id) === String(id));
+
   if (!livro) return;
 
   const container = document.getElementById('detalhes-container');
+
   document.getElementById('modal-detalhes')?.classList.remove('hidden');
+
   if (!container) return;
 
   const paginas = Number(livro.paginas) || 0;
-  const atual = Number(livro.paginaAtual) || 0;
-  const percentual = paginas > 0 ? Math.min(100, Math.round(atual / paginas * 100)) : 0;
-  const experiencia = livro.experiencia || { emocionei: 0, presa: 0, pensei: 0 };
-  const tags = Array.isArray(livro.tags) ? livro.tags.join(', ') : '';
+  const pagAtual = Number(livro.paginaAtual) || 0;
+
+  const porcentagem = paginas > 0
+    ? Math.min(100, Math.round((pagAtual / paginas) * 100))
+    : 0;
+
+  const experiencia = livro.experiencia || {
+    emocionei: 0,
+    presa: 0,
+    pensei: 0
+  };
+
+  const tagsTexto = Array.isArray(livro.tags) ? livro.tags.join(', ') : '';
 
   container.innerHTML = `
     <div class="flex flex-col sm:flex-row gap-4 mb-4">
-      <img src="${escaparHTML(livro.capa || CAPA_PADRAO)}"
-        class="w-28 h-40 object-cover rounded-xl shadow-md mx-auto sm:mx-0"
-        onerror="this.onerror=null;this.src='${CAPA_PADRAO}';">
+      <img src="${escaparHTML(livro.capa || CAPA_PADRAO)}" class="w-28 h-40 object-cover rounded-xl shadow-md mx-auto sm:mx-0 flex-shrink-0" onerror="this.onerror=null; this.src='${CAPA_PADRAO}';">
 
-      <div class="space-y-2 flex-1">
+      <div class="space-y-2 text-center sm:text-left flex-1">
         <div class="flex items-center justify-between gap-2">
-          <span class="text-[10px] font-bold text-blush-500 bg-blush-50 px-2 py-0.5 rounded">
-            ${escaparHTML(livro.genero || 'Gênero não informado')}
-          </span>
-          <button type="button" onclick="toggleFavorito('${escaparHTML(livro.id)}')"
-            class="text-xs border px-2.5 py-1 rounded-lg">
+          <span class="text-[10px] font-bold uppercase tracking-wider text-blush-500 bg-blush-50 px-2 py-0.5 rounded">${escaparHTML(livro.genero || 'Gênero não informado')}</span>
+
+          <button type="button" onclick="toggleFavorito('${escaparHTML(livro.id)}')" class="text-xs font-semibold cursor-pointer border px-2.5 py-1 rounded-lg transition ${livro.favorito ? 'bg-blush-50 text-blush-600 border-blush-200' : 'bg-stone-50 text-stone-600 border-stone-200'}">
             ${livro.favorito ? 'Favoritado ♥' : '♡ Favoritar'}
           </button>
         </div>
 
-        <h3 class="font-serif text-lg font-bold text-stone-800">
-          ${escaparHTML(livro.titulo)}
-        </h3>
+        <h3 class="font-serif text-lg font-bold text-stone-800">${escaparHTML(livro.titulo)}</h3>
+
         <p class="text-xs text-cozy-muted">
-          ${escaparHTML(livro.autor)} · ${paginas || '?'} páginas
+          ${escaparHTML(livro.autor)} • ${paginas ? `${paginas} páginas` : 'Número de páginas não informado'}
         </p>
 
-        ${livro.descricao
-          ? `<p class="text-xs text-stone-600">${escaparHTML(livro.descricao.slice(0, 500))}</p>`
-          : ''}
+        ${livro.descricao ? `<p class="text-xs text-stone-600 text-left">${escaparHTML(livro.descricao.slice(0, 500))}</p>` : ''}
 
-        <label class="block text-xs font-semibold">Status:</label>
-        <select id="detalhes-status"
-          onchange="atualizarStatus('${escaparHTML(livro.id)}',this.value)"
-          class="bg-stone-50 border rounded-lg p-1.5 text-xs w-full">
+        <label class="block text-xs font-semibold text-stone-700 mb-1" for="detalhes-status">Status:</label>
+
+        <select id="detalhes-status" onchange="atualizarStatus('${escaparHTML(livro.id)}', this.value)" class="bg-stone-50 border border-stone-200 rounded-lg p-1.5 text-xs w-full sm:w-auto font-medium focus:outline-none">
           <option value="quero_ler" ${livro.status === 'quero_ler' ? 'selected' : ''}>Quero Ler</option>
           <option value="lendo" ${livro.status === 'lendo' ? 'selected' : ''}>Lendo</option>
           <option value="lido" ${livro.status === 'lido' ? 'selected' : ''}>Lido</option>
@@ -549,72 +514,66 @@ function abrirDetalhes(id) {
       </div>
     </div>
 
-    <div class="bg-blush-50/60 p-3.5 rounded-xl border space-y-2 ${livro.status === 'lendo' ? '' : 'hidden'}">
-      <div class="flex justify-between text-xs font-semibold">
+    <div id="bloco-progresso" class="bg-blush-50/60 p-3.5 rounded-xl border border-blush-100 space-y-2 ${livro.status === 'lendo' ? '' : 'hidden'}">
+      <div class="flex justify-between items-center text-xs font-semibold text-stone-800">
         <span>Progresso de leitura</span>
-        <span id="label-porcentagem">${percentual}%</span>
+        <span id="label-porcentagem" class="text-blush-600 font-bold">${porcentagem}%</span>
       </div>
+
       <div class="flex items-center gap-2">
-        <span class="text-xs">Página</span>
-        <input type="number" id="input-pagina-atual" value="${atual}" min="0"
-          ${paginas ? `max="${paginas}"` : ''}
-          oninput="alterarPaginaAoVivo('${escaparHTML(livro.id)}',this.value)"
-          class="border rounded-lg p-1.5 text-xs w-20">
-        <span class="text-xs">de ${paginas || '?'}</span>
+        <span class="text-xs text-cozy-muted">Página</span>
+        <input type="number" id="input-pagina-atual" value="${pagAtual}" min="0" ${paginas ? `max="${paginas}"` : ''} oninput="alterarPaginaAoVivo('${escaparHTML(livro.id)}', this.value)" class="bg-white border border-stone-200 rounded-lg p-1.5 text-xs w-20 font-bold text-stone-800 text-center focus:outline-none focus:border-blush-400">
+        <span class="text-xs text-cozy-muted">de ${paginas || '?'}</span>
       </div>
     </div>
 
-    <div class="bg-stone-50 p-4 rounded-xl border space-y-3 mt-3">
-      <h4 class="font-serif font-bold text-xs">Minha experiência</h4>
+    <div class="bg-stone-50 p-4 rounded-xl border border-stone-200 space-y-3 mt-3">
+      <h4 class="font-serif font-bold text-xs text-stone-800">Minha experiência</h4>
 
-      <label class="block text-xs font-semibold">Nota geral</label>
-      <select id="exp-nota" class="bg-white border rounded-lg p-1 text-xs">
-        ${[0,1,2,3,4,5].map(n => `
-          <option value="${n}" ${Number(livro.nota) === n ? 'selected' : ''}>
-            ${n === 0 ? 'Sem nota' : `${n} / 5`}
-          </option>`).join('')}
+      <label class="block text-xs font-semibold text-stone-700">Nota geral</label>
+      <select id="exp-nota" class="bg-white border border-stone-200 rounded-lg p-1 text-xs font-bold text-stone-800">
+        <option value="0" ${Number(livro.nota) === 0 ? 'selected' : ''}>Sem nota</option>
+        ${[1, 2, 3, 4, 5].map(n => `<option value="${n}" ${Number(livro.nota) === n ? 'selected' : ''}>${n} / 5</option>`).join('')}
       </select>
 
-      <label class="block text-xs font-semibold">Quanto me emocionei? (0–5)</label>
-      <input id="exp-emocionei" type="number" min="0" max="5"
-        value="${Number(experiencia.emocionei) || 0}" class="bg-white border rounded-lg p-1.5 text-xs w-full">
+      <label class="block text-xs font-semibold text-stone-700">Quanto me emocionei? (0–5)</label>
+      <input id="exp-emocionei" type="number" min="0" max="5" value="${Number(experiencia.emocionei) || 0}" class="bg-white border border-stone-200 rounded-lg p-1.5 text-xs w-full">
 
-      <label class="block text-xs font-semibold">Quanto fiquei presa à história? (0–5)</label>
-      <input id="exp-presa" type="number" min="0" max="5"
-        value="${Number(experiencia.presa) || 0}" class="bg-white border rounded-lg p-1.5 text-xs w-full">
+      <label class="block text-xs font-semibold text-stone-700">Quanto fiquei presa à história? (0–5)</label>
+      <input id="exp-presa" type="number" min="0" max="5" value="${Number(experiencia.presa) || 0}" class="bg-white border border-stone-200 rounded-lg p-1.5 text-xs w-full">
 
-      <label class="block text-xs font-semibold">Quanto fiquei pensando nela depois? (0–5)</label>
-      <input id="exp-pensei" type="number" min="0" max="5"
-        value="${Number(experiencia.pensei) || 0}" class="bg-white border rounded-lg p-1.5 text-xs w-full">
+      <label class="block text-xs font-semibold text-stone-700">Quanto fiquei pensando nela depois? (0–5)</label>
+      <input id="exp-pensei" type="number" min="0" max="5" value="${Number(experiencia.pensei) || 0}" class="bg-white border border-stone-200 rounded-lg p-1.5 text-xs w-full">
 
-      <label class="block text-xs font-semibold">Tags (separadas por vírgula)</label>
-      <input id="exp-tags" value="${escaparHTML(tags)}"
-        placeholder="romance, emocionante, slow burn"
-        class="bg-white border rounded-lg p-1.5 text-xs w-full">
+      <label class="block text-xs font-semibold text-stone-700">Tags (separadas por vírgula)</label>
+      <input id="exp-tags" value="${escaparHTML(tagsTexto)}" placeholder="romance, emocionante, slow burn" class="bg-white border border-stone-200 rounded-lg p-1.5 text-xs w-full">
 
-      <button type="button" onclick="salvarExperiencia('${escaparHTML(livro.id)}')"
-        class="w-full bg-blush-500 text-white py-2 rounded-lg text-xs">
-        Salvar avaliação
-      </button>
+      <button type="button" onclick="salvarExperiencia('${escaparHTML(livro.id)}')" class="w-full bg-blush-500 hover:bg-blush-600 text-white font-semibold py-2 rounded-lg text-xs transition cursor-pointer">Salvar avaliação</button>
     </div>`;
 }
 
 function alterarPaginaAoVivo(id, valor) {
   const livro = biblioteca.find(l => String(l.id) === String(id));
+
   if (!livro) return;
 
   let pagina = Number(valor);
+
   if (!Number.isFinite(pagina) || pagina < 0) pagina = 0;
-  if (Number(livro.paginas) > 0) pagina = Math.min(pagina, Number(livro.paginas));
+
+  if (Number(livro.paginas) > 0) {
+    pagina = Math.min(pagina, Number(livro.paginas));
+  }
 
   livro.paginaAtual = Math.floor(pagina);
 
-  const percentual = Number(livro.paginas) > 0
-    ? Math.min(100, Math.round(pagina / Number(livro.paginas) * 100))
+  const pct = Number(livro.paginas) > 0
+    ? Math.min(100, Math.round((pagina / Number(livro.paginas)) * 100))
     : 0;
 
   const label = document.getElementById('label-porcentagem');
-  if (label) label.innerText = `${percentual}%`;
+
+  if (label) label.innerText = `${pct}%`;
 
   salvarStorage();
   renderizarEstante();
@@ -626,29 +585,35 @@ function fecharModalDetalhes() {
 
 function toggleFavorito(id) {
   const livro = biblioteca.find(l => String(l.id) === String(id));
+
   if (!livro) return;
 
   livro.favorito = !livro.favorito;
+
   salvarStorage();
   renderizarEstante();
   abrirDetalhes(id);
 }
 
-function atualizarStatus(id, status) {
+function atualizarStatus(id, novoStatus) {
   const livro = biblioteca.find(l => String(l.id) === String(id));
+
   if (!livro) return;
 
-  const anterior = livro.status;
-  livro.status = status;
+  const statusAnterior = livro.status;
+  livro.status = novoStatus;
 
-  if (status === 'lendo' && !livro.dataInicio) {
+  if (novoStatus === 'lendo' && !livro.dataInicio) {
     livro.dataInicio = new Date().toISOString();
   }
 
-  if (status === 'lido') {
-    if (Number(livro.paginas) > 0) livro.paginaAtual = Number(livro.paginas);
+  if (novoStatus === 'lido') {
+    if (Number(livro.paginas) > 0) {
+      livro.paginaAtual = Number(livro.paginas);
+    }
+
     livro.dataFim = new Date().toISOString();
-  } else if (anterior === 'lido') {
+  } else if (statusAnterior === 'lido') {
     livro.dataFim = null;
   }
 
@@ -659,21 +624,27 @@ function atualizarStatus(id, status) {
 
 function salvarExperiencia(id) {
   const livro = biblioteca.find(l => String(l.id) === String(id));
+
   if (!livro) return;
 
-  const obterNota = campo =>
-    Math.max(0, Math.min(5, Number(document.getElementById(campo)?.value) || 0));
+  const obterNota = campo => Math.max(
+    0,
+    Math.min(5, Number(document.getElementById(campo)?.value) || 0)
+  );
 
   livro.nota = obterNota('exp-nota');
+
   livro.experiencia = {
     emocionei: obterNota('exp-emocionei'),
     presa: obterNota('exp-presa'),
     pensei: obterNota('exp-pensei')
   };
 
-  livro.tags = (document.getElementById('exp-tags')?.value || '')
+  const tags = document.getElementById('exp-tags')?.value || '';
+
+  livro.tags = tags
     .split(',')
-    .map(normalizar)
+    .map(tag => normalizar(tag))
     .filter(Boolean);
 
   salvarStorage();
@@ -683,106 +654,113 @@ function salvarExperiencia(id) {
 
 function deletarLivro(e, id) {
   if (e) e.stopPropagation();
+
   if (!confirm('Deseja remover este livro da sua estante?')) return;
 
   biblioteca = biblioteca.filter(l => String(l.id) !== String(id));
+
   salvarStorage();
   renderizarEstante();
 }
 
-// ============================================================
-// SORTEIO
-// ============================================================
-
+// --- ESCOLHER UM LIVRO ALEATORIAMENTE ---
 function escolherPorMim() {
   const naoLidos = biblioteca.filter(l => l.status === 'quero_ler');
+
   const lista = naoLidos.length
     ? naoLidos
     : biblioteca.filter(l => l.status !== 'lido');
 
   if (!lista.length) {
-    alert('Adicione livros à sua estante para sortear uma leitura.');
-    return;
+    return alert('Sua estante não tem livros disponíveis. Adicione livros ou mude o status de algum título.');
   }
 
-  const livro = lista[Math.floor(Math.random() * lista.length)];
+  const sorteado = lista[Math.floor(Math.random() * lista.length)];
+
   document.getElementById('modal-quiz')?.classList.remove('hidden');
 
   const container = document.getElementById('quiz-container');
+
   if (!container) return;
 
   container.innerHTML = `
     <div class="text-center space-y-3">
-      <span class="text-[10px] font-bold text-blush-500 uppercase">Sorteio literário</span>
-      <h3 class="font-serif text-lg font-bold">Sugestão para sua próxima leitura</h3>
-      <div class="bg-stone-50 p-3 rounded-xl border flex flex-col items-center">
-        <img src="${escaparHTML(livro.capa || CAPA_PADRAO)}"
-          class="w-24 h-36 object-cover rounded-md shadow mb-2"
-          onerror="this.onerror=null;this.src='${CAPA_PADRAO}';">
-        <h4 class="font-serif font-bold text-sm">${escaparHTML(livro.titulo)}</h4>
-        <p class="text-xs text-cozy-muted">${escaparHTML(livro.autor)}</p>
+      <span class="text-[10px] font-bold text-blush-500 uppercase tracking-wider">Sorteio literário</span>
+      <h3 class="font-serif text-lg font-bold text-stone-800">Sugestão para sua próxima leitura</h3>
+
+      <div class="bg-stone-50 p-3 rounded-xl border border-stone-200 flex flex-col items-center">
+        <img src="${escaparHTML(sorteado.capa || CAPA_PADRAO)}" class="w-24 h-36 object-cover rounded-md shadow mb-2" onerror="this.onerror=null; this.src='${CAPA_PADRAO}';">
+        <h4 class="font-serif font-bold text-stone-800 text-sm">${escaparHTML(sorteado.titulo)}</h4>
+        <p class="text-xs text-cozy-muted">${escaparHTML(sorteado.autor)} • ${sorteado.paginas || '?'} págs.</p>
       </div>
-      <button type="button" onclick="fecharQuiz()"
-        class="w-full bg-blush-500 text-white py-2 rounded-lg text-xs">
-        Escolher este livro
-      </button>
+
+      <button type="button" onclick="fecharQuiz()" class="w-full bg-blush-500 text-white font-semibold py-2 rounded-lg text-xs hover:bg-blush-600 transition cursor-pointer">Escolher este livro</button>
     </div>`;
 }
 
-// ============================================================
-// MATCH — PERSONALIZAÇÃO PELO HISTÓRICO DE LEITURA
-// ============================================================
-
+// --- MATCH: CÁLCULO BASEADO EM DADOS, SEM PORCENTAGEM ALEATÓRIA ---
 const TAGS_POR_VIBE = {
   leve: ['leve', 'divertido', 'confortavel', 'fofo', 'feel good', 'comedia', 'romance leve'],
   emocionante: ['emocionante', 'triste', 'drama', 'emocao', 'chorar', 'luto', 'familia', 'melancolico'],
-  presa: ['envolvente', 'ritmo rapido', 'rapido', 'suspense', 'plot twist', 'viciante', 'misterio'],
+  presa: ['envolvente', 'ritmo rapido', 'rapido', 'suspense', 'plot twist', 'viciante', 'mistério', 'misterio'],
   pensar: ['reflexivo', 'filosofico', 'complexo', 'existencial', 'introspectivo'],
   romance: ['romance', 'amor', 'relacionamento', 'slow burn', 'enemies to lovers', 'friends to lovers']
 };
 
 function pontuarVibe(livro, vibe) {
   const tags = (livro.tags || []).map(normalizar);
-  const texto = normalizar(
-    `${livro.genero || ''} ${livro.titulo || ''} ${livro.descricao || ''} ${tags.join(' ')}`
-  );
+  const genero = normalizar(livro.genero);
+  const tituloDescricao = normalizar(`${livro.titulo || ''} ${livro.descricao || ''}`);
   const pistas = TAGS_POR_VIBE[vibe] || [];
 
-  if (!texto.trim() || !pistas.length) return null;
+  if (!pistas.length) return null;
 
-  const encontrados = pistas.filter(p => texto.includes(normalizar(p)));
+  const texto = [...tags, genero, tituloDescricao].join(' ');
+  const encontrados = pistas.filter(pista => texto.includes(normalizar(pista)));
+
+  // Não presume compatibilidade quando os metadados não têm informação suficiente.
+  if (!texto.trim() || (!tags.length && !genero && !livro.descricao)) {
+    return null;
+  }
+
   return encontrados.length
-    ? Math.min(1, encontrados.length / 2)
+    ? Math.min(1, encontrados.length / Math.min(2, pistas.length))
     : 0;
 }
 
 function pontuarGenero(livro, generoDesejado) {
   const desejado = normalizar(generoDesejado);
-  if (!desejado || desejado === 'qualquer') return null;
-
   const genero = normalizar(livro.genero);
   const tags = (livro.tags || []).map(normalizar);
 
   if (!genero && !tags.length) return null;
+  if (!desejado || desejado === 'qualquer') return null;
 
   if (genero === desejado || genero.includes(desejado) || desejado.includes(genero)) {
     return 1;
   }
 
-  if (tags.some(t => t === desejado || t.includes(desejado) || desejado.includes(t))) {
+  if (tags.some(tag =>
+    tag === desejado ||
+    tag.includes(desejado) ||
+    desejado.includes(tag)
+  )) {
     return 1;
   }
 
+  // Categorias amplas podem conter termos mais específicos.
   const grupos = {
     romance: ['romance', 'ficcao romantica', 'romantic'],
-    drama: ['drama', 'literatura'],
+    drama: ['drama', 'ficcao', 'literatura'],
     ficcao: ['ficcao', 'fantasia', 'ficcao cientifica', 'distopia'],
     suspense: ['suspense', 'misterio', 'thriller', 'crime']
   };
 
   const familia = grupos[desejado] || [desejado];
 
-  if (familia.some(t => genero.includes(t) || tags.some(tag => tag.includes(t)))) {
+  if (familia.some(t =>
+    genero.includes(t) || tags.some(tag => tag.includes(t))
+  )) {
     return 0.65;
   }
 
@@ -791,6 +769,7 @@ function pontuarGenero(livro, generoDesejado) {
 
 function pontuarTamanho(livro, tempo) {
   const paginas = Number(livro.paginas);
+
   if (!Number.isFinite(paginas) || paginas <= 0) return null;
 
   if (tempo === 'curto') {
@@ -809,20 +788,31 @@ function pontuarTamanho(livro, tempo) {
   return null;
 }
 
-// Extrai características que podem ser comparadas entre livros.
 function extrairCaracteristicasLivro(livro) {
   const tags = Array.isArray(livro.tags) ? livro.tags : [];
   const genero = normalizar(livro.genero || '');
   const descricao = normalizar(livro.descricao || '');
+  const titulo = normalizar(livro.titulo || '');
 
+  // Evita palavras muito genéricas que criariam semelhanças artificiais.
   const ignorar = new Set([
-    'book', 'books', 'fiction', 'ficcao', 'literature',
-    'literatura', 'novel', 'novels', 'general', 'geral'
+    'book',
+    'books',
+    'fiction',
+    'ficcao',
+    'literature',
+    'literatura',
+    'novel',
+    'novels',
+    'general',
+    'geral',
+    'unknown',
+    'nao informado'
   ]);
 
   const tagsLimpa = tags
     .map(normalizar)
-    .filter(t => t && t.length > 2 && !ignorar.has(t));
+    .filter(tag => tag && tag.length > 2 && !ignorar.has(tag));
 
   const palavrasDescricao = descricao
     .split(/[^a-z0-9]+/)
@@ -831,7 +821,8 @@ function extrairCaracteristicasLivro(livro) {
   return {
     genero,
     tags: [...new Set(tagsLimpa)],
-    palavras: [...new Set([...tagsLimpa, ...palavrasDescricao])]
+    palavras: [...new Set([...tagsLimpa, ...palavrasDescricao])],
+    titulo
   };
 }
 
@@ -843,111 +834,150 @@ function similaridadeLivros(livroA, livroB) {
   let peso = 0;
 
   if (a.genero && b.genero) {
-    let afinidade = 0;
+    const ga = a.genero;
+    const gb = b.genero;
 
-    if (
-      a.genero === b.genero ||
-      a.genero.includes(b.genero) ||
-      b.genero.includes(a.genero)
-    ) {
-      afinidade = 1;
+    let afinidadeGenero = 0;
+
+    if (ga === gb || ga.includes(gb) || gb.includes(ga)) {
+      afinidadeGenero = 1;
     } else {
       const grupos = [
-        ['romance', 'romantic', 'love'],
-        ['fantasy', 'fantasia', 'science fiction', 'ficcao cientifica', 'distopia'],
+        ['romance', 'romantic', 'love', 'relacionamento'],
+        ['fantasy', 'fantasia', 'ficcao cientifica', 'science fiction', 'distopia'],
         ['mystery', 'misterio', 'thriller', 'suspense', 'crime'],
         ['drama', 'literary fiction', 'ficcao literaria'],
-        ['young adult', 'adolescente']
+        ['young adult', 'young adult fiction', 'adolescente']
       ];
 
-      if (grupos.some(g =>
-        g.some(t => a.genero.includes(t)) &&
-        g.some(t => b.genero.includes(t))
+      if (grupos.some(grupo =>
+        grupo.some(t => ga.includes(t)) &&
+        grupo.some(t => gb.includes(t))
       )) {
-        afinidade = 0.6;
+        afinidadeGenero = 0.6;
       }
     }
 
-    soma += afinidade * 0.55;
+    soma += afinidadeGenero * 0.55;
     peso += 0.55;
   }
 
-  const tagsA = new Set(a.palavras);
-  const tagsB = new Set(b.palavras);
+  const conjuntoA = new Set(a.palavras);
+  const conjuntoB = new Set(b.palavras);
 
-  if (tagsA.size && tagsB.size) {
+  if (conjuntoA.size && conjuntoB.size) {
     let comuns = 0;
-    for (const tag of tagsA) {
-      if (tagsB.has(tag)) comuns++;
+
+    for (const tag of conjuntoA) {
+      if (conjuntoB.has(tag)) comuns++;
     }
 
-    const jaccard = comuns / Math.max(1, tagsA.size + tagsB.size - comuns);
-    const cobertura = comuns / Math.max(1, Math.min(tagsA.size, tagsB.size));
+    const jaccard = comuns / Math.max(
+      1,
+      conjuntoA.size + conjuntoB.size - comuns
+    );
 
-    soma += Math.max(jaccard, cobertura * 0.7) * 0.45;
+    const cobertura = comuns / Math.max(
+      1,
+      Math.min(conjuntoA.size, conjuntoB.size)
+    );
+
+    const afinidadeTags = Math.max(jaccard, cobertura * 0.7);
+
+    soma += afinidadeTags * 0.45;
     peso += 0.45;
   }
 
   return peso ? Math.max(0, Math.min(1, soma / peso)) : null;
 }
 
-// Usa as notas anteriores para estimar o perfil literário da pessoa.
 function pontuarPerfil(livro, bibliotecaUsuario) {
-  const avaliados = bibliotecaUsuario.filter(l =>
-    l.status === 'lido' && Number(l.nota) >= 1 && Number(l.nota) <= 5
+  const avaliados = bibliotecaUsuario.filter(item =>
+    item.status === 'lido' &&
+    Number(item.nota) >= 1 &&
+    Number(item.nota) <= 5
   );
 
   if (!avaliados.length) return null;
 
-  const caracteristicas = extrairCaracteristicasLivro(livro);
-  if (!caracteristicas.genero && !caracteristicas.tags.length && !caracteristicas.palavras.length) {
+  const caracteristicasCandidato = extrairCaracteristicasLivro(livro);
+
+  if (
+    !caracteristicasCandidato.genero &&
+    !caracteristicasCandidato.tags.length &&
+    !caracteristicasCandidato.palavras.length
+  ) {
     return null;
   }
 
-  let saldo = 0;
+  let somaAfinidade = 0;
   let pesoTotal = 0;
 
   for (const avaliado of avaliados) {
     const nota = Number(avaliado.nota);
     const similaridade = similaridadeLivros(livro, avaliado);
 
-    if (similaridade === null || nota === 3) continue;
+    if (similaridade === null) continue;
+
+    // Notas altas indicam preferências; notas baixas reduzem a afinidade.
+    const pesoNota = Math.abs(nota - 3);
+
+    if (pesoNota === 0) continue;
 
     if (nota > 3) {
       const peso = (nota - 3) * 1.25;
-      saldo += similaridade * peso;
+
+      somaAfinidade += similaridade * peso;
       pesoTotal += peso;
     } else {
       const peso = (3 - nota) * 0.8;
-      saldo -= similaridade * peso;
+
+      somaAfinidade -= similaridade * peso;
       pesoTotal += peso;
     }
   }
 
-  // Se a pessoa costuma gostar de determinado gênero, isso também pesa.
-  if (caracteristicas.genero) {
-    const mesmoGenero = avaliados.filter(l => {
-      const g = normalizar(l.genero || '');
+  // A média das notas de livros do mesmo gênero também influencia.
+  const generoCandidato = caracteristicasCandidato.genero;
+
+  if (generoCandidato) {
+    const doMesmoGenero = avaliados.filter(item => {
+      const g = normalizar(item.genero || '');
+
       return g && (
-        g === caracteristicas.genero ||
-        g.includes(caracteristicas.genero) ||
-        caracteristicas.genero.includes(g)
+        g === generoCandidato ||
+        g.includes(generoCandidato) ||
+        generoCandidato.includes(g)
       );
     });
 
-    if (mesmoGenero.length) {
-      const media = mesmoGenero.reduce((s, l) => s + Number(l.nota), 0) / mesmoGenero.length;
-      const afinidade = Math.max(0, Math.min(1, (media - 1) / 4));
+    if (doMesmoGenero.length) {
+      const media = doMesmoGenero.reduce(
+        (total, item) => total + Number(item.nota),
+        0
+      ) / doMesmoGenero.length;
 
-      saldo += (afinidade - 0.5) * 1.5;
-      pesoTotal += 1.5;
+      const afinidadeGenero = Math.max(
+        0,
+        Math.min(1, (media - 1) / 4)
+      );
+
+      const pesoGenero = 1.5;
+
+      somaAfinidade += (afinidadeGenero - 0.5) * pesoGenero;
+      pesoTotal += pesoGenero;
     }
   }
 
   if (!pesoTotal) return null;
 
-  // É uma pontuação relativa de compatibilidade, não uma probabilidade científica.
-  return Math.round(Math.max(0.05, Math.min(0.98, 0.5 + (saldo / pesoTotal) * 0.48)) * 100) / 100;
+  // A pontuação é um índice de compatibilidade, não uma probabilidade real.
+  const saldo = somaAfinidade / pesoTotal;
+  const pontuacao = 0.5 + saldo * 0.48;
+
+  return Math.round(
+    Math.max(0.05, Math.min(0.98, pontuacao)) * 100
+  ) / 100;
 }
 
 function calcularMatch(livro, respostasQuiz, livrosUsuario = biblioteca) {
@@ -971,21 +1001,26 @@ function calcularMatch(livro, respostasQuiz, livrosUsuario = biblioteca) {
     };
   }
 
-  const pesoTotal = disponiveis.reduce((s, c) => s + c.peso, 0);
-  const pontos = disponiveis.reduce((s, c) => s + c.valor * c.peso, 0);
+  const pesoTotal = disponiveis.reduce((soma, c) => soma + c.peso, 0);
+
+  const pontos = disponiveis.reduce(
+    (soma, c) => soma + c.valor * c.peso,
+    0
+  );
+
   const motivos = [];
 
   if (perfil !== null) {
-    const avaliados = livrosUsuario.filter(l =>
-      l.status === 'lido' && Number(l.nota) > 0
+    const avaliados = livrosUsuario.filter(
+      item => item.status === 'lido' && Number(item.nota) > 0
     );
 
     const semelhantes = avaliados
-      .map(l => ({
-        livro: l,
-        similaridade: similaridadeLivros(livro, l)
+      .map(item => ({
+        livro: item,
+        similaridade: similaridadeLivros(livro, item)
       }))
-      .filter(x => x.similaridade !== null)
+      .filter(item => item.similaridade !== null)
       .sort((a, b) => b.similaridade - a.similaridade)[0];
 
     if (
@@ -994,7 +1029,7 @@ function calcularMatch(livro, respostasQuiz, livrosUsuario = biblioteca) {
       Number(semelhantes.livro.nota) >= 4
     ) {
       motivos.push(
-        `Tem características em comum com "${semelhantes.livro.titulo}", que você avaliou com ${semelhantes.livro.nota}/5`
+        `Tem características em comum com “${semelhantes.livro.titulo}”, que você avaliou com ${semelhantes.livro.nota}/5`
       );
     } else if (perfil >= 0.65) {
       motivos.push('Combina com tendências das suas avaliações anteriores');
@@ -1003,34 +1038,35 @@ function calcularMatch(livro, respostasQuiz, livrosUsuario = biblioteca) {
     }
   }
 
-  for (const c of disponiveis) {
-    if (c.nome === 'seu momento' && c.valor >= 0.65) {
+  for (const criterio of disponiveis) {
+    if (criterio.nome === 'seu momento' && criterio.valor >= 0.65) {
       motivos.push('Pode combinar com o tipo de leitura que você procura agora');
-    }
-
-    if (c.nome === 'gênero escolhido' && c.valor >= 0.65) {
+    } else if (
+      criterio.nome === 'gênero escolhido' &&
+      criterio.valor >= 0.65
+    ) {
       motivos.push(`Combina com o gênero ${respostasQuiz.genero}`);
-    }
-
-    if (c.nome === 'tamanho do livro' && c.valor >= 0.65) {
+    } else if (
+      criterio.nome === 'tamanho do livro' &&
+      criterio.valor >= 0.65
+    ) {
       motivos.push('O número de páginas combina com o tamanho escolhido');
     }
   }
 
   return {
-    porcentagem: Math.round(pontos / pesoTotal * 100),
+    porcentagem: Math.round((pontos / pesoTotal) * 100),
     motivos: [...new Set(motivos)]
   };
 }
 
-// ============================================================
-// PERGUNTAS DO MATCH
-// ============================================================
-
+// --- QUIZ MATCH ---
 function iniciarQuiz() {
   etapaAtual = 1;
   respostas = { vibe: '', tempo: '', genero: '' };
+
   document.getElementById('modal-quiz')?.classList.remove('hidden');
+
   renderizarEtapa();
 }
 
@@ -1040,65 +1076,62 @@ function fecharQuiz() {
 
 function renderizarEtapa() {
   const container = document.getElementById('quiz-container');
+
   if (!container) return;
 
   if (etapaAtual === 1) {
     container.innerHTML = `
-      <span class="text-[10px] font-bold text-blush-500 uppercase">Passo 1 de 3</span>
-      <h3 class="font-serif text-base font-bold text-stone-800 mt-1 mb-3">
-        Que tipo de leitura você procura?
-      </h3>
+      <span class="text-[10px] font-bold text-blush-500 uppercase tracking-wider">Passo 1 de 3</span>
+      <h3 class="font-serif text-base font-bold text-stone-800 mt-1 mb-3">Que tipo de leitura você procura?</h3>
+
       <div class="space-y-2">
-        <button type="button" onclick="selecionarOpcao('vibe','leve',2)" class="w-full p-2.5 border rounded-xl text-left hover:border-blush-400">
-          <span class="block font-semibold text-xs">Leve, sem muita carga emocional</span>
+        <button type="button" onclick="selecionarOpcao('vibe','leve',2)" class="w-full p-2.5 border border-stone-200 rounded-xl text-left hover:border-blush-400 hover:bg-blush-50/50 transition cursor-pointer">
+          <span class="block font-semibold text-xs text-stone-800">Leve, sem muita carga emocional</span>
         </button>
-        <button type="button" onclick="selecionarOpcao('vibe','emocionante',2)" class="w-full p-2.5 border rounded-xl text-left hover:border-blush-400">
-          <span class="block font-semibold text-xs">Emocionante, quero me envolver com a história</span>
+
+        <button type="button" onclick="selecionarOpcao('vibe','emocionante',2)" class="w-full p-2.5 border border-stone-200 rounded-xl text-left hover:border-blush-400 hover:bg-blush-50/50 transition cursor-pointer">
+          <span class="block font-semibold text-xs text-stone-800">Emocionante, quero me envolver com a história</span>
         </button>
-        <button type="button" onclick="selecionarOpcao('vibe','presa',2)" class="w-full p-2.5 border rounded-xl text-left hover:border-blush-400">
-          <span class="block font-semibold text-xs">Uma história que prenda minha atenção</span>
+
+        <button type="button" onclick="selecionarOpcao('vibe','presa',2)" class="w-full p-2.5 border border-stone-200 rounded-xl text-left hover:border-blush-400 hover:bg-blush-50/50 transition cursor-pointer">
+          <span class="block font-semibold text-xs text-stone-800">Uma história que prenda minha atenção</span>
         </button>
-        <button type="button" onclick="selecionarOpcao('vibe','pensar',2)" class="w-full p-2.5 border rounded-xl text-left hover:border-blush-400">
-          <span class="block font-semibold text-xs">Uma história que me faça refletir</span>
+
+        <button type="button" onclick="selecionarOpcao('vibe','pensar',2)" class="w-full p-2.5 border border-stone-200 rounded-xl text-left hover:border-blush-400 hover:bg-blush-50/50 transition cursor-pointer">
+          <span class="block font-semibold text-xs text-stone-800">Uma história que me faça refletir</span>
         </button>
-        <button type="button" onclick="selecionarOpcao('vibe','romance',2)" class="w-full p-2.5 border rounded-xl text-left hover:border-blush-400">
-          <span class="block font-semibold text-xs">Uma história de amor ou relacionamentos</span>
+
+        <button type="button" onclick="selecionarOpcao('vibe','romance',2)" class="w-full p-2.5 border border-stone-200 rounded-xl text-left hover:border-blush-400 hover:bg-blush-50/50 transition cursor-pointer">
+          <span class="block font-semibold text-xs text-stone-800">Uma história de amor ou relacionamentos</span>
         </button>
       </div>`;
   } else if (etapaAtual === 2) {
     container.innerHTML = `
-      <span class="text-[10px] font-bold text-blush-500 uppercase">Passo 2 de 3</span>
-      <h3 class="font-serif text-base font-bold text-stone-800 mt-1 mb-3">
-        Qual tamanho de livro você prefere?
-      </h3>
+      <span class="text-[10px] font-bold text-blush-500 uppercase tracking-wider">Passo 2 de 3</span>
+      <h3 class="font-serif text-base font-bold text-stone-800 mt-1 mb-3">Qual tamanho de livro você prefere?</h3>
+
       <div class="space-y-2">
-        <button type="button" onclick="selecionarOpcao('tempo','curto',3)" class="w-full p-2.5 border rounded-xl text-left hover:border-blush-400">
-          <span class="block font-semibold text-xs">Curto — até 280 páginas</span>
+        <button type="button" onclick="selecionarOpcao('tempo','curto',3)" class="w-full p-2.5 border border-stone-200 rounded-xl text-left hover:border-blush-400 hover:bg-blush-50/50 transition cursor-pointer">
+          <span class="block font-semibold text-xs text-stone-800">📖 Curto — até 280 páginas</span>
         </button>
-        <button type="button" onclick="selecionarOpcao('tempo','medio',3)" class="w-full p-2.5 border rounded-xl text-left hover:border-blush-400">
-          <span class="block font-semibold text-xs">Médio — cerca de 300 a 450 páginas</span>
+
+        <button type="button" onclick="selecionarOpcao('tempo','medio',3)" class="w-full p-2.5 border border-stone-200 rounded-xl text-left hover:border-blush-400 hover:bg-blush-50/50 transition cursor-pointer">
+          <span class="block font-semibold text-xs text-stone-800">📚 Médio — cerca de 300 a 450 páginas</span>
         </button>
-        <button type="button" onclick="selecionarOpcao('tempo','qualquer',3)" class="w-full p-2.5 border rounded-xl text-left hover:border-blush-400">
-          <span class="block font-semibold text-xs">Sem preferência de tamanho</span>
+
+        <button type="button" onclick="selecionarOpcao('tempo','qualquer',3)" class="w-full p-2.5 border border-stone-200 rounded-xl text-left hover:border-blush-400 hover:bg-blush-50/50 transition cursor-pointer">
+          <span class="block font-semibold text-xs text-stone-800">Sem preferência de tamanho</span>
         </button>
       </div>`;
   } else if (etapaAtual === 3) {
-    const generos = [
-      'Romance', 'Drama', 'Ficção', 'Suspense',
-      'Fantasia', 'Young Adult', 'Não ficção', 'Qualquer'
-    ];
-
     container.innerHTML = `
-      <span class="text-[10px] font-bold text-blush-500 uppercase">Passo 3 de 3</span>
-      <h3 class="font-serif text-base font-bold text-stone-800 mt-1 mb-3">
-        Qual gênero você quer ler?
-      </h3>
+      <span class="text-[10px] font-bold text-blush-500 uppercase tracking-wider">Passo 3 de 3</span>
+      <h3 class="font-serif text-base font-bold text-stone-800 mt-1 mb-3">Qual gênero você quer ler?</h3>
+
       <div class="grid grid-cols-2 gap-2">
-        ${generos.map(g => `
-          <button type="button" onclick="finalizarQuiz('${g}')"
-            class="p-2.5 border rounded-xl font-semibold text-xs hover:border-blush-400">
-            ${g}
-          </button>`).join('')}
+        ${['Romance', 'Drama', 'Ficção', 'Suspense', 'Fantasia', 'Young Adult', 'Não ficção', 'Qualquer'].map(g => `
+          <button type="button" onclick="finalizarQuiz('${g}')" class="p-2.5 border border-stone-200 rounded-xl font-semibold text-xs text-stone-700 hover:border-blush-400 hover:bg-blush-50/50 transition text-center cursor-pointer">${g}</button>
+        `).join('')}
       </div>`;
   }
 }
@@ -1106,22 +1139,28 @@ function renderizarEtapa() {
 function selecionarOpcao(chave, valor, proximaEtapa) {
   respostas[chave] = valor;
   etapaAtual = proximaEtapa;
+
   renderizarEtapa();
 }
 
-// ============================================================
-// BUSCA EXTERNA DE LIVROS
-// ============================================================
-
+// --- NORMALIZAÇÃO DOS RESULTADOS DO GOOGLE BOOKS ---
 function normalizarResultadoGoogle(item) {
   const info = item.volumeInfo || {};
+
   let capa = info.imageLinks?.thumbnail ||
     info.imageLinks?.smallThumbnail ||
     CAPA_PADRAO;
 
-  if (capa.startsWith('http:')) capa = capa.replace('http:', 'https:');
+  if (capa.startsWith('http:')) {
+    capa = capa.replace('http:', 'https:');
+  }
 
   const categorias = Array.isArray(info.categories) ? info.categories : [];
+
+  const tags = categorias
+    .flatMap(c => c.split(/[\/,]/))
+    .map(normalizar)
+    .filter(Boolean);
 
   return {
     id: `google-${item.id || Math.random()}`,
@@ -1131,11 +1170,12 @@ function normalizarResultadoGoogle(item) {
     genero: categorias[0]?.split('/')[0]?.trim() || '',
     capa,
     descricao: info.description || '',
-    tags: categorias.flatMap(c => c.split(/[\/,]/)).map(normalizar),
+    tags,
     novidade: true
   };
 }
 
+// --- BUSCA EXTERNA DE RECOMENDAÇÕES ---
 async function buscarRecomendacoesExternas(genero, livrosUsuario = biblioteca) {
   const termos = {
     Romance: 'romance novel',
@@ -1150,14 +1190,16 @@ async function buscarRecomendacoesExternas(genero, livrosUsuario = biblioteca) {
 
   const consultaBase = termos[genero] || 'popular fiction novel';
 
-  // Usa gêneros e tags dos livros que a pessoa avaliou bem para
-  // deixar a própria busca mais relevante para aquele perfil.
   const avaliadosBem = livrosUsuario
     .filter(l => l.status === 'lido' && Number(l.nota) >= 4)
     .sort((a, b) => Number(b.nota) - Number(a.nota));
 
   const generosPreferidos = [
-    ...new Set(avaliadosBem.map(l => String(l.genero || '').trim()).filter(Boolean))
+    ...new Set(
+      avaliadosBem
+        .map(l => String(l.genero || '').trim())
+        .filter(Boolean)
+    )
   ].slice(0, 2);
 
   const tagsPreferidas = [
@@ -1174,114 +1216,152 @@ async function buscarRecomendacoesExternas(genero, livrosUsuario = biblioteca) {
     ? `${consultaBase} ${pistasPerfil}`
     : consultaBase;
 
-  let livros = [];
+  const chaveCache = normalizar(`${genero}|${consulta}`);
 
-  try {
-    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(consulta)}&maxResults=40&orderBy=relevance`;
-    const resposta = await fetch(url);
-
-    if (resposta.ok) {
-      const dados = await resposta.json();
-      livros = (dados.items || [])
-        .map(normalizarResultadoGoogle)
-        .filter(l => l.titulo);
-    }
-  } catch (erro) {
-    console.warn('Google Books indisponível:', erro);
+  // Reutiliza os resultados da mesma pesquisa durante esta sessão.
+  if (cacheRecomendacoes.has(chaveCache)) {
+    return cacheRecomendacoes.get(chaveCache).map(livro => ({
+      ...livro,
+      tags: [...(livro.tags || [])]
+    }));
   }
 
+  let livros = [];
+
+  // Se o Google Books estiver temporariamente bloqueado por erro 429,
+  // pula a chamada e tenta a Open Library.
+  if (Date.now() >= googleBooksBloqueadoAte) {
+    try {
+      const urlGoogle =
+        `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(consulta)}&maxResults=20&orderBy=relevance`;
+
+      const respostaGoogle = await fetch(urlGoogle);
+
+      if (respostaGoogle.status === 429) {
+        googleBooksBloqueadoAte = Date.now() + 5 * 60 * 1000;
+
+        console.warn(
+          'Google Books limitou as chamadas (429). Usando Open Library temporariamente.'
+        );
+      } else if (respostaGoogle.ok) {
+        const dadosGoogle = await respostaGoogle.json();
+
+        livros = (dadosGoogle.items || [])
+          .map(normalizarResultadoGoogle)
+          .filter(livro => livro.titulo);
+      }
+    } catch (erro) {
+      console.warn('Google Books indisponível; tentando Open Library:', erro);
+    }
+  }
+
+  // A Open Library complementa os resultados ou substitui o Google Books.
   if (livros.length < 10) {
     try {
-      const url = `https://openlibrary.org/search.json?q=${encodeURIComponent(consulta)}&limit=40`;
-      const resposta = await fetch(url);
+      const urlOpenLibrary =
+        `https://openlibrary.org/search.json?q=${encodeURIComponent(consulta)}&limit=30`;
 
-      if (resposta.ok) {
-        const dados = await resposta.json();
+      const respostaOpenLibrary = await fetch(urlOpenLibrary);
 
-        const complementares = (dados.docs || []).map(doc => {
-          const assuntos = Array.isArray(doc.subject) ? doc.subject : [];
+      if (respostaOpenLibrary.ok) {
+        const dados = await respostaOpenLibrary.json();
+
+        const complementares = (dados.docs || []).map(item => {
+          const assuntos = Array.isArray(item.subject) ? item.subject : [];
 
           return {
-            id: `openlibrary-${doc.key || doc.title}`,
-            titulo: doc.title || '',
-            autor: doc.author_name?.join(', ') || 'Autor desconhecido',
-            paginas: Number(doc.number_of_pages_median) > 0
-              ? Number(doc.number_of_pages_median)
+            id: `openlibrary-${item.key || item.title}`,
+            titulo: item.title || '',
+            autor: item.author_name?.join(', ') || 'Autor desconhecido',
+            paginas: Number(item.number_of_pages_median) > 0
+              ? Number(item.number_of_pages_median)
               : null,
             genero: assuntos[0] || '',
-            capa: doc.cover_i
-              ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`
+            capa: item.cover_i
+              ? `https://covers.openlibrary.org/b/id/${item.cover_i}-M.jpg`
               : CAPA_PADRAO,
             descricao: assuntos.slice(0, 8).join(', '),
             tags: assuntos.map(normalizar),
             novidade: true
           };
-        }).filter(l => l.titulo);
+        }).filter(livro => livro.titulo);
 
         livros = [...livros, ...complementares];
       }
     } catch (erro) {
-      console.warn('Open Library indisponível:', erro);
+      console.warn('Falha na Open Library:', erro);
     }
   }
 
-  // Remove títulos repetidos entre as APIs.
+  // Remove títulos duplicados entre as duas APIs.
   const vistos = new Set();
 
-  return livros.filter(livro => {
+  const resultado = livros.filter(livro => {
     const titulo = normalizar(livro.titulo);
+
     if (!titulo || vistos.has(titulo)) return false;
+
     vistos.add(titulo);
     return true;
   });
+
+  // Não guarda resultados vazios no cache.
+  if (resultado.length) {
+    cacheRecomendacoes.set(chaveCache, resultado);
+  }
+
+  return resultado;
 }
 
-// ============================================================
-// RESULTADOS DO MATCH
-// ============================================================
-
+// --- FINALIZAÇÃO DO MATCH ---
 async function finalizarQuiz(genero) {
   respostas.genero = genero;
 
   const container = document.getElementById('quiz-container');
+
   if (!container) return;
 
   container.innerHTML = `
     <div class="text-center py-10 space-y-3">
       <div class="w-6 h-6 border-2 border-blush-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-      <p class="text-xs text-cozy-muted">Buscando livros para o seu perfil...</p>
+      <p class="text-xs text-cozy-muted font-medium">Buscando sugestões...</p>
     </div>`;
 
   try {
     const externos = await buscarRecomendacoesExternas(genero, biblioteca);
 
-    // Exclui qualquer livro que já esteja na estante do usuário.
-    const novos = externos.filter(l =>
-      l.titulo && !tituloJaExiste(l.titulo)
+    // Sugere somente livros que ainda não estão na estante.
+    const novos = externos.filter(
+      livro => livro.titulo && !tituloJaExiste(livro.titulo)
     );
 
     const candidatos = novos.map(livro => {
-      const resultado = calcularMatch(livro, respostas, biblioteca);
+      const calculo = calcularMatch(livro, respostas, biblioteca);
 
       return {
         ...livro,
-        match: resultado.porcentagem ?? 50,
-        motivos: resultado.motivos,
+        match: calculo.porcentagem ?? 50,
+        motivos: calculo.porcentagem === null
+          ? ['Os dados disponíveis sobre este livro são limitados.']
+          : calculo.motivos,
         novidade: true
       };
     });
 
-    // Primeiro os livros mais compatíveis com as notas e preferências.
     candidatos.sort((a, b) => b.match - a.match);
+
     exibirResultado(candidatos.slice(0, 3));
   } catch (erro) {
-    console.error('Erro ao gerar o Match:', erro);
+    console.error('Erro ao gerar recomendações:', erro);
+
     exibirResultado([]);
   }
 }
 
+// --- ADICIONAR UMA RECOMENDAÇÃO À ESTANTE ---
 function adicionarRecomendacaoPorIndice(index) {
   const livro = recomendacoesQuizAtuais[index];
+
   if (!livro) return;
 
   if (tituloJaExiste(livro.titulo)) {
@@ -1289,7 +1369,7 @@ function adicionarRecomendacaoPorIndice(index) {
     return;
   }
 
-  biblioteca.unshift({
+  const novoLivro = {
     id: (Date.now() + Math.random()).toString(),
     titulo: livro.titulo,
     autor: livro.autor,
@@ -1302,19 +1382,29 @@ function adicionarRecomendacaoPorIndice(index) {
     favorito: false,
     nota: 0,
     tags: Array.isArray(livro.tags) ? livro.tags : [],
-    experiencia: { emocionei: 0, presa: 0, pensei: 0 },
+    experiencia: {
+      emocionei: 0,
+      presa: 0,
+      pensei: 0
+    },
     dataInicio: null,
     dataFim: null
-  });
+  };
+
+  biblioteca.unshift(novoLivro);
 
   salvarStorage();
   renderizarEstante();
+
   alert('Livro adicionado à sua estante!');
+
   fecharQuiz();
 }
 
+// --- EXIBIR RESULTADOS ---
 function exibirResultado(livros) {
   const container = document.getElementById('quiz-container');
+
   if (!container) return;
 
   recomendacoesQuizAtuais = livros || [];
@@ -1323,57 +1413,48 @@ function exibirResultado(livros) {
     container.innerHTML = `
       <div class="text-center py-6 space-y-3">
         <p class="text-xs text-cozy-muted">
-          Não consegui buscar sugestões agora. Confira sua conexão e tente novamente.
+          Não encontrei sugestões suficientes desta vez. Tente novamente mais tarde ou confira sua conexão.
         </p>
-        <button type="button" onclick="iniciarQuiz()"
-          class="w-full bg-blush-500 text-white py-2 rounded-lg text-xs">
+        <button type="button" onclick="iniciarQuiz()" class="w-full bg-blush-500 text-white font-semibold py-2 rounded-lg text-xs hover:bg-blush-600 transition cursor-pointer">
           Tentar novamente
         </button>
-        <button type="button" onclick="fecharQuiz()"
-          class="w-full bg-stone-100 text-stone-700 py-2 rounded-lg text-xs">
+        <button type="button" onclick="fecharQuiz()" class="w-full bg-stone-100 hover:bg-stone-200 text-stone-700 font-semibold py-2 rounded-lg text-xs transition cursor-pointer">
           Fechar
         </button>
       </div>`;
+
     return;
   }
 
   container.innerHTML = `
     <div class="text-center mb-3">
-      <span class="text-[10px] font-bold text-blush-500 uppercase">ReadMatch</span>
-      <h3 class="font-serif text-base font-bold text-stone-800">
-        Sugestões para sua próxima leitura
-      </h3>
+      <span class="text-[10px] font-bold text-blush-500 uppercase tracking-wider">ReadMatch</span>
+      <h3 class="font-serif text-base font-bold text-stone-800">Livros que combinam com você</h3>
       <p class="text-[11px] text-cozy-muted mt-1">
-        A compatibilidade considera suas respostas e suas avaliações anteriores.
+        A pontuação usa os dados disponíveis; quanto mais você avalia, mais personalizado fica.
       </p>
     </div>
 
     <div class="space-y-2.5 max-h-96 overflow-y-auto custom-scroll pr-1">
-      ${recomendacoesQuizAtuais.map((livro, index) => `
+      ${recomendacoesQuizAtuais.map((livro, idx) => `
         <div class="p-2.5 bg-stone-50 rounded-xl border border-stone-200 space-y-2">
           <div class="flex gap-3 items-center">
-            <img src="${escaparHTML(livro.capa || CAPA_PADRAO)}"
-              class="w-12 h-16 object-cover rounded shadow-sm flex-shrink-0"
-              onerror="this.onerror=null;this.src='${CAPA_PADRAO}';">
+            <img src="${escaparHTML(livro.capa || CAPA_PADRAO)}" class="w-12 h-16 object-cover rounded shadow-sm flex-shrink-0" onerror="this.onerror=null; this.src='${CAPA_PADRAO}';">
 
             <div class="flex-1 min-w-0">
               <div class="flex justify-between items-start gap-2">
-                <h4 class="font-serif font-bold text-stone-800 text-xs">
-                  ${escaparHTML(livro.titulo)}
-                </h4>
-                <span class="bg-blush-100 text-blush-600 font-bold text-[10px] px-2 py-0.5 rounded-full">
-                  ${livro.match}% Match
-                </span>
+                <h4 class="font-serif font-bold text-stone-800 text-xs">${escaparHTML(livro.titulo)}</h4>
+                <span class="bg-blush-100 text-blush-600 font-bold text-[10px] px-2 py-0.5 rounded-full flex-shrink-0">${livro.match}% Match</span>
               </div>
 
-              <p class="text-[11px] text-cozy-muted">
-                ${escaparHTML(livro.autor)}
-              </p>
-              <span class="text-[9px] text-amber-700 bg-amber-50 border px-1.5 py-0.5 rounded inline-block mt-1">
+              <p class="text-[11px] text-cozy-muted">${escaparHTML(livro.autor)}</p>
+
+              <span class="text-[9px] text-amber-700 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded font-medium inline-block mt-1">
                 Livro novo para sua estante
               </span>
+
               <p class="text-[10px] text-stone-500 mt-1">
-                ${livro.paginas || '?'} páginas · ${escaparHTML(livro.genero || 'Gênero não informado')}
+                ${livro.paginas ? `${livro.paginas} páginas` : 'Páginas não informadas'} • ${escaparHTML(livro.genero || 'Gênero não informado')}
               </p>
             </div>
           </div>
@@ -1384,25 +1465,24 @@ function exibirResultado(livros) {
               <ul class="list-disc pl-4 mt-1">
                 ${livro.motivos.slice(0, 3).map(m => `<li>${escaparHTML(m)}</li>`).join('')}
               </ul>
-            </div>` : ''}
+            </div>
+          ` : '<p class="text-[10px] text-stone-500">Ainda há poucos dados para explicar esta sugestão.</p>'}
 
-          <button type="button" onclick="adicionarRecomendacaoPorIndice(${index})"
-            class="w-full bg-blush-500 hover:bg-blush-600 text-white py-1.5 rounded-lg text-[11px]">
-            + Adicionar à estante
-          </button>
-        </div>`).join('')}
+          ${livro.novidade ? `
+            <button type="button" onclick="adicionarRecomendacaoPorIndice(${idx})" class="w-full bg-blush-500 hover:bg-blush-600 text-white font-semibold py-1.5 rounded-lg text-[11px] transition cursor-pointer">
+              + Adicionar à estante
+            </button>
+          ` : ''}
+        </div>
+      `).join('')}
     </div>
 
-    <button type="button" onclick="fecharQuiz()"
-      class="w-full mt-3 bg-stone-100 text-stone-700 py-2 rounded-lg text-xs">
+    <button type="button" onclick="fecharQuiz()" class="w-full mt-3 bg-stone-100 hover:bg-stone-200 text-stone-700 font-semibold py-2 rounded-lg text-xs transition cursor-pointer">
       Fechar
     </button>`;
 }
 
-// ============================================================
-// INICIALIZAÇÃO
-// ============================================================
-
+// --- INICIALIZAÇÃO ---
 document.addEventListener('DOMContentLoaded', () => {
   atualizarHeaderUsuario();
   filtrarEstante('todos');
